@@ -34,12 +34,19 @@ type group struct {
 
 func newGroup(t *testing.T, seed uint64, members []string, opts ...gensim.Option) *group {
 	t.Helper()
+	return newGroupOf(t, seed, members, func(string) Machine[int, int, int] { return counter{} }, opts...)
+}
+
+// newGroupOf is newGroup with the machine of each member made by machine,
+// given its node.
+func newGroupOf(t *testing.T, seed uint64, members []string, machine func(node string) Machine[int, int, int], opts ...gensim.Option) *group {
+	t.Helper()
 	g := &group{
 		t: t, s: gensim.New(seed, opts...), name: "g", members: members,
 		pids: map[string]proc.PID{}, leaders: map[uint64]string{},
 	}
-	spec := Spec[int, int, int]{Group: g.name, Members: members, Machine: counter{}}
 	for _, m := range members {
+		spec := Spec[int, int, int]{Group: g.name, Members: members, Machine: machine(m)}
 		pid, err := gensim.Start(g.s, Child(spec), gensim.On(m))
 		if err != nil {
 			t.Fatal(err)
