@@ -110,6 +110,27 @@ func (l raftLog) notAheadOf(lastIndex, lastTerm uint64) bool {
 	return l.lastIndex() <= lastIndex
 }
 
+// configUpTo returns the configuration in force at index i: the latest
+// up to there.
+func (l raftLog) configUpTo(i uint64) Config {
+	for j := int(min(i, l.lastIndex())-l.start) - 1; j >= 0; j-- {
+		if c := l.entries[j].Config; c != nil {
+			return *c
+		}
+	}
+	return l.startConfig
+}
+
+// compact returns the log after snap, which takes the place of the
+// entries up to its index: those after it stay if keep, none else.
+func (l raftLog) compact(snap Snapshot, keep bool) raftLog {
+	c := raftLog{start: snap.Index, startTerm: snap.Term, startConfig: snap.Config}
+	if keep && snap.Index < l.lastIndex() {
+		c.entries = slices.Clone(l.entries[snap.Index-l.start:])
+	}
+	return c
+}
+
 // config returns the latest configuration in the log, which is in force
 // once appended, committed or not, and its index; the empty one, at 0,
 // before the group is founded.

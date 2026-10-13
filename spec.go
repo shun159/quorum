@@ -22,6 +22,10 @@ type Spec[S, Cmd, Rep any] struct {
 	// Heartbeat is how often a leader tells the others it lives, well
 	// under ElectionTimeout. Zero means a sixth of ElectionTimeout.
 	Heartbeat time.Duration
+	// SnapshotEvery is how many entries applied make a member take a
+	// snapshot of its machine, in their place: zero means
+	// DefaultSnapshotEvery.
+	SnapshotEvery uint64
 	// Storage keeps who the member is, its term, its vote and its log
 	// across restarts, each member its own. Without one, the member keeps
 	// them in memory only: restarted, it is another member, which the
@@ -31,6 +35,9 @@ type Spec[S, Cmd, Rep any] struct {
 
 // DefaultElectionTimeout is Spec.ElectionTimeout when zero.
 const DefaultElectionTimeout = 300 * time.Millisecond
+
+// DefaultSnapshotEvery is Spec.SnapshotEvery when zero.
+const DefaultSnapshotEvery = 10000
 
 // replicaName is the name of the member of group on each node.
 func replicaName(group string) string { return "quorum/" + group }
@@ -42,6 +49,9 @@ func (spec Spec[S, Cmd, Rep]) withDefaults() Spec[S, Cmd, Rep] {
 	}
 	if spec.Heartbeat == 0 {
 		spec.Heartbeat = spec.ElectionTimeout / 6
+	}
+	if spec.SnapshotEvery == 0 {
+		spec.SnapshotEvery = DefaultSnapshotEvery
 	}
 	return spec
 }

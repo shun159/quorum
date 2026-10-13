@@ -59,8 +59,12 @@ func (b behaviour[S, Cmd, Rep]) replicate(d replica[S]) []actor.Effect {
 	return effs
 }
 
-// appendTo sends p the entries from its next one on, after the one before.
+// appendTo sends p the entries from its next one on, after the one before,
+// or the snapshot, if the leader has them no more.
 func (b behaviour[S, Cmd, Rep]) appendTo(d replica[S], p peer) actor.Effect {
+	if p.next <= d.log.start {
+		return b.send(p.id, installSnapshot{Term: d.term, Leader: d.id, To: p.id, Snapshot: d.snapshot})
+	}
 	prev := p.next - 1
 	return b.send(p.id, appendEntries{
 		Term:      d.term,
@@ -187,7 +191,7 @@ func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 			effs = append(effs, d.reply(d.applied, rep)...)
 		}
 	}
-	return effs
+	return append(effs, b.takeSnapshot(d)...)
 }
 
 // reply answers the command or the change at index, if the leader

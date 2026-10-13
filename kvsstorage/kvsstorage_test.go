@@ -33,8 +33,8 @@ func (w writer) HandleInfo(waiting *genserver.From[error], msg any) (*genserver.
 	return waiting, nil
 }
 
-// write performs effs on st, in a simulation, and waits for them.
-func write(t *testing.T, st quorum.Storage, effs ...actor.Effect) {
+// save performs effs on st, in a simulation, and waits for them.
+func save(t *testing.T, st quorum.Storage, effs ...actor.Effect) {
 	t.Helper()
 	s := gensim.New(1)
 	pid, err := gensim.Spawn(s, genserver.Gen(writer{st: st, effs: effs}), nil)
@@ -66,10 +66,10 @@ func TestStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	g, gx := For(table, "g"), For(table, "gx")
-	write(t, g, g.SaveState(quorum.State{Term: 3, VotedFor: voted}, 1), g.Append(1, entries(1, 1, 2, 2), 2))
-	write(t, gx, gx.Append(1, entries(7), 3))
+	save(t, g, g.SaveState(quorum.State{Term: 3, VotedFor: voted}, 1), g.Append(1, entries(1, 1, 2, 2), 2))
+	save(t, gx, gx.Append(1, entries(7), 3))
 	// A leader of term 3 replaces the entries from index 3 on.
-	write(t, g, g.Append(3, []quorum.Entry{{Term: 3, Cmd: "new"}}, 4))
+	save(t, g, g.Append(3, []quorum.Entry{{Term: 3, Cmd: "new"}}, 4))
 	if err := table.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,5 +95,40 @@ func TestStorage(t *testing.T) {
 	}
 	if saved, _ := For(table, "none").Load(); saved.State != (quorum.State{}) || len(saved.Log) != 0 {
 		t.Errorf("a group never written loaded %+v", saved)
+	}
+}
+
+// A snapshot takes the place of the entries up to it; those after it stay.
+func TestSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	table, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := For(table, "g")
+	snap := quorum.Snapshot{Index: 2, Term: 1, Config: quorum.Config{Voters: []proc.PID{voted}}, State: 42}
+	save(t, g, g.Append(1, entries(1, 1, 1, 2), 1), g.SaveSnapshot(snap, 2))
+	if err := table.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	table, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer table.Close()
+	saved, err := For(table, "g").Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Snapshot.Index != 2 || saved.Snapshot.State != 42 || len(saved.Snapshot.Config.Voters) != 1 {
+		t.Errorf("snapshot loaded %+v", saved.Snapshot)
+	}
+	if want := entries(1, 1, 1, 2)[2:]; !slices.Equal(saved.Log, want) {
+		t.Errorf("log loaded %+v, want %+v", saved.Log, want)
+	}
+	// What is left of the log is that after the snapshot.
+	for k := range table.Range(Key{Group: "g", Kind: KindEntry}, Key{Group: "g", Kind: KindEntry, Index: 3}) {
+		t.Errorf("entry %d left", k.Index)
 	}
 }

@@ -23,6 +23,9 @@ type Storage interface {
 	// Append returns the effect writing entries from index on, in place
 	// of the entries saved from index on.
 	Append(index uint64, entries []Entry, tag any) actor.Effect
+	// SaveSnapshot returns the effect saving snap, in place of the
+	// entries up to its index; those after it stay.
+	SaveSnapshot(snap Snapshot, tag any) actor.Effect
 	// Durable reports whether msg tells that the write of tag is durable,
 	// or that it failed, with err.
 	Durable(msg any) (tag any, err error, ok bool)
@@ -36,10 +39,22 @@ type State struct {
 	VotedFor proc.PID
 }
 
-// Saved is what a member saved.
+// Snapshot is the state of the machine once the entries up to Index are
+// applied, with the term of the last of them, and the configuration in
+// force then: it takes the place of those entries.
+type Snapshot struct {
+	Index  uint64
+	Term   uint64
+	Config Config
+	State  any
+}
+
+// Saved is what a member saved: its state, its snapshot, if Index is not
+// 0, and its log after the snapshot.
 type Saved struct {
-	State State
-	Log   []Entry
+	State    State
+	Snapshot Snapshot
+	Log      []Entry
 }
 
 // writeTag tags a write: Seq numbers the writes of the member, and Index
@@ -74,6 +89,13 @@ func (b behaviour[S, Cmd, Rep]) saveLog(d *replica[S], index uint64) []actor.Eff
 	d.stable = min(d.stable, index-1)
 	entries := d.log.from(index, len(d.log.entries))
 	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.Append(index, entries, tag) })
+}
+
+// saveSnapshot saves the snapshot of the member, in place of the entries
+// it holds.
+func (b behaviour[S, Cmd, Rep]) saveSnapshot(d *replica[S]) []actor.Effect {
+	snap := d.snapshot
+	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.SaveSnapshot(snap, tag) })
 }
 
 // write returns the effect of a write, tagged as the next. Without a

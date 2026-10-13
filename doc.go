@@ -37,9 +37,16 @@
 // it neither votes nor stands, nor takes what is sent to the one before
 // it. To swap the disk of a node, remove its member, then add the new one.
 //
+// # Snapshots
+//
+// Once SnapshotEvery entries are applied past its last snapshot, a member
+// takes a [Snapshot] of its machine, in place of those entries, so that
+// its log does not grow for good. The leader sends its own to a member
+// missing entries it has no more, as one added to the group, which takes
+// it in place of its machine and of its log up to there.
+//
 // # What there is not yet
 //
-// There are no snapshots: a member added catches up from the first entry
-// of the log, which grows for good. A read is a command, committed as any
-// other.
+// A snapshot is sent whole, in one message, which suits machines of a
+// moderate size. A read is a command, committed as any other.
 package quorum

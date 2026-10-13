@@ -34,11 +34,12 @@ type replica[S any] struct {
 	leader   proc.PID // of term, once known
 
 	log      raftLog
-	config   Config // the latest in the log
-	configAt uint64 // its index
-	commit   uint64 // the last index known committed
-	applied  uint64 // the last index applied to state
-	state    S      // of the machine
+	snapshot Snapshot // of the entries up to log.start
+	config   Config   // the latest in the log
+	configAt uint64   // its index
+	commit   uint64   // the last index known committed
+	applied  uint64   // the last index applied to state
+	state    S        // of the machine
 
 	votes   []proc.PID // granted to it, as a candidate
 	peers   []peer     // the other members, as the leader
@@ -90,6 +91,15 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		term:     saved.State.Term,
 		votedFor: saved.State.VotedFor,
 		log:      logOf(saved.Log...),
+	}
+	if snap := saved.Snapshot; snap.Index > 0 {
+		state, ok := snap.State.(S)
+		if !ok {
+			return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s saved a snapshot of a %T", b.spec.Group, snap.State)
+		}
+		d.snapshot, d.state = snap, state
+		d.log = raftLog{start: snap.Index, startTerm: snap.Term, startConfig: snap.Config, entries: saved.Log}
+		d.commit, d.applied = snap.Index, snap.Index
 	}
 	d.logChanged()
 	d.stable = d.log.lastIndex()
@@ -179,7 +189,7 @@ func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S],
 // makes the member a follower in that term first, whatever it was, which
 // it saves.
 func (b behaviour[S, Cmd, Rep]) message(r role, d replica[S], msg any) (role, replica[S], []actor.Effect) {
-	if m, ok := msg.(appendEntries); ok && m.To != d.id {
+	if m, ok := msg.(addressed); ok && m.to() != d.id {
 		return r, d, nil // for an earlier member on this node
 	}
 	var saving []actor.Effect
@@ -202,6 +212,8 @@ func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, rep
 		return b.appendEntries(r, d, m)
 	case appendReply:
 		return b.appendReply(r, d, m)
+	case installSnapshot:
+		return b.installSnapshot(r, d, m)
 	}
 	return r, d, nil
 }

@@ -18,12 +18,14 @@ type memStorage struct {
 	writes []memWrite // performed, in order, not known durable yet
 }
 
-// memWrite is a write: of the state if state is set, else of the log.
+// memWrite is a write: of the state if state is set, of a snapshot if
+// snapshot is, else of the log.
 type memWrite struct {
-	tag     any
-	state   *State
-	index   uint64
-	entries []Entry
+	tag      any
+	state    *State
+	snapshot *Snapshot
+	index    uint64
+	entries  []Entry
 }
 
 // fsyncTime is how long a write of a memStorage takes to be durable.
@@ -45,7 +47,11 @@ func (e memEffect) Perform(env gen.Env) {
 }
 
 func (m *memStorage) Load() (Saved, error) {
-	return Saved{State: m.saved.State, Log: slices.Clone(m.saved.Log)}, nil
+	return Saved{State: m.saved.State, Snapshot: m.saved.Snapshot, Log: slices.Clone(m.saved.Log)}, nil
+}
+
+func (m *memStorage) SaveSnapshot(snap Snapshot, tag any) actor.Effect {
+	return memEffect{m: m, w: memWrite{tag: tag, snapshot: &snap}}
 }
 
 func (m *memStorage) SaveState(st State, tag any) actor.Effect {
@@ -75,11 +81,22 @@ func (m *memStorage) crash(keep int) {
 // keep makes the first n writes durable.
 func (m *memStorage) keep(n int) {
 	for _, w := range m.writes[:n] {
-		if w.state != nil {
+		switch {
+		case w.state != nil:
 			m.saved.State = *w.state
-			continue
+		case w.snapshot != nil:
+			m.saveSnapshot(*w.snapshot)
+		default:
+			kept := min(w.index-1-m.saved.Snapshot.Index, uint64(len(m.saved.Log)))
+			m.saved.Log = append(slices.Clip(m.saved.Log[:kept]), w.entries...)
 		}
-		m.saved.Log = append(slices.Clip(m.saved.Log[:w.index-1]), w.entries...)
 	}
 	m.writes = m.writes[n:]
+}
+
+// saveSnapshot puts snap in place of the entries up to its index.
+func (m *memStorage) saveSnapshot(snap Snapshot) {
+	gone := min(snap.Index-m.saved.Snapshot.Index, uint64(len(m.saved.Log)))
+	m.saved.Log = slices.Clone(m.saved.Log[gone:])
+	m.saved.Snapshot = snap
 }

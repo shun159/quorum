@@ -8,7 +8,8 @@ import (
 func init() {
 	dist.Register(requestVote{}, voteReply{}, appendEntries{}, appendReply{},
 		command{}, applied{}, redirect{}, deposed{}, rejected{},
-		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{})
+		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{},
+		installSnapshot{})
 }
 
 // The messages between the members of a group, the RPCs of Raft, sent as
@@ -40,6 +41,15 @@ type (
 		Entries   []Entry
 		Commit    uint64
 	}
+	// installSnapshot gives the member To the leader's snapshot, in place
+	// of the entries it misses, which the leader has no more. It is
+	// answered with an appendReply.
+	installSnapshot struct {
+		Term     uint64
+		Leader   proc.PID
+		To       proc.PID
+		Snapshot Snapshot
+	}
 	// appendReply tells the leader how far the log of From matches its
 	// own, Match, or, failing, how long it is, for the leader to go back.
 	appendReply struct {
@@ -59,6 +69,15 @@ func (m requestVote) term() uint64   { return m.Term }
 func (m voteReply) term() uint64     { return m.Term }
 func (m appendEntries) term() uint64 { return m.Term }
 func (m appendReply) term() uint64   { return m.Term }
+
+func (m installSnapshot) term() uint64 { return m.Term }
+
+// addressed is a message to one member, which a member other than To on
+// its node, a later one, drops.
+type addressed interface{ to() proc.PID }
+
+func (m appendEntries) to() proc.PID   { return m.To }
+func (m installSnapshot) to() proc.PID { return m.To }
 
 // A command from a client, and the replies it may get.
 type (

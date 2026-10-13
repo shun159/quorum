@@ -32,6 +32,7 @@ type group struct {
 
 	leaders   map[uint64]string // the leader seen in each term
 	committed []Entry           // what was seen committed, from index 1
+	states    map[uint64]int    // the state of the machine seen at each index applied
 
 	due *crashLater // a crash to come, amid the steps of a run
 }
@@ -64,11 +65,11 @@ func unfounded(t *testing.T, seed uint64, members []string, machine func(node st
 	g := &group{
 		t: t, s: gensim.New(seed, opts...), name: "g", members: members,
 		pids: map[string]proc.PID{}, specs: map[string]Spec[int, int, int]{},
-		storage: map[string]*memStorage{}, leaders: map[uint64]string{},
+		storage: map[string]*memStorage{}, leaders: map[uint64]string{}, states: map[uint64]int{},
 	}
 	for _, m := range members {
 		g.storage[m] = &memStorage{}
-		g.specs[m] = Spec[int, int, int]{Group: g.name, Machine: machine(m), Storage: g.storage[m]}
+		g.specs[m] = Spec[int, int, int]{Group: g.name, Machine: machine(m), Storage: g.storage[m], SnapshotEvery: snapshotEvery}
 		g.start(m)
 	}
 	return g
@@ -283,22 +284,21 @@ func sameEntry(a, b Entry) bool {
 		slices.Equal(a.Config.Voters, b.Config.Voters) && slices.Equal(a.Config.Learners, b.Config.Learners)
 }
 
-// checkApplied checks that the state of a member is what it applied: the
-// sum of the commands committed up to there.
+// checkApplied checks that the members agree on the machine: one that
+// applied the entries up to an index holds what every other did there.
 func (g *group) checkApplied(m string, d replica[int]) error {
-	sum := 0
-	for _, e := range g.committed[:min(d.applied, uint64(len(g.committed)))] {
-		if n, ok := e.Cmd.(int); ok {
-			sum += n
-		}
+	if state, ok := g.states[d.applied]; ok && state != d.state {
+		return fmt.Errorf("%s holds %d, having applied up to %d, where another held %d", m, d.state, d.applied, state)
 	}
-	if sum != d.state {
-		return fmt.Errorf("%s holds %d, having applied commands adding up to %d", m, d.state, sum)
-	}
+	g.states[d.applied] = d.state
 	return nil
 }
 
 var three = []string{"a", "b", "c"}
+
+// snapshotEvery is small in the simulations, for the members to take
+// snapshots, and send them, all the time.
+const snapshotEvery = 4
 
 func TestElection(t *testing.T) {
 	g := newGroup(t, 1, three)
