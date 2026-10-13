@@ -2,7 +2,6 @@ package quorum
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/proc"
@@ -73,7 +72,7 @@ func (b behaviour[S, Cmd, Rep]) saveState(d *replica[S]) []actor.Effect {
 // saveLog saves the log of the member from index on, which changed.
 func (b behaviour[S, Cmd, Rep]) saveLog(d *replica[S], index uint64) []actor.Effect {
 	d.stable = min(d.stable, index-1)
-	entries := slices.Clone(d.log[index-1:])
+	entries := d.log.from(index, len(d.log.entries))
 	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.Append(index, entries, tag) })
 }
 

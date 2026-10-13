@@ -50,7 +50,7 @@ func (b behaviour[S, Cmd, Rep]) found(r role, d replica[S], c genstatem.Call, m 
 		return r, d, actor.Do(c.Reply(rejected{fmt.Sprintf("quorum: %v is not in the configuration of group %s", d.id, b.spec.Group)}))
 	}
 	config := Config{Voters: slices.Clone(m.Config.Voters), Learners: slices.Clone(m.Config.Learners)}
-	d.log = raftLog{{Term: 0, Config: &config}}
+	d.log = logOf(Entry{Term: 0, Config: &config})
 	d.logChanged()
 	effs := b.saveLog(&d, 1)
 	return r, d, append(effs, d.after(c.Reply(applied{}))...)
@@ -59,10 +59,10 @@ func (b behaviour[S, Cmd, Rep]) found(r role, d replica[S], c genstatem.Call, m 
 // foundedWith reports whether the log is only the founding of the group
 // with config.
 func (d *replica[S]) foundedWith(config Config) bool {
-	if d.log.lastIndex() != 1 || d.log[0].Config == nil {
+	if d.log.lastIndex() != 1 || d.log.at(1).Config == nil {
 		return false
 	}
-	return sameConfig(*d.log[0].Config, config)
+	return sameConfig(*d.log.at(1).Config, config)
 }
 
 // AddMember adds the member on node to group, asking the members on nodes
@@ -153,7 +153,7 @@ func (b behaviour[S, Cmd, Rep]) promote(r role, d *replica[S], p peer) []actor.E
 // members, those it adds included. Those it removes still get it, to
 // learn they are out, until it is committed.
 func (b behaviour[S, Cmd, Rep]) appendConfig(r role, d *replica[S], config Config) []actor.Effect {
-	d.log = append(d.log, Entry{Term: d.term, Config: &config})
+	d.log = d.log.add(Entry{Term: d.term, Config: &config})
 	d.logChanged()
 	for _, id := range d.others() {
 		if d.peer(id) == nil {

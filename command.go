@@ -118,7 +118,7 @@ func (b behaviour[S, Cmd, Rep]) command(r role, d replica[S], c genstatem.Call, 
 	if r != leader {
 		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	}
-	d.log = append(d.log, Entry{Term: d.term, Cmd: m.Cmd})
+	d.log = d.log.add(Entry{Term: d.term, Cmd: m.Cmd})
 	d.pending = append(d.pending, pending{index: d.log.lastIndex(), from: c.From})
 	effs := b.saveLog(&d, d.log.lastIndex())
 	effs = append(effs, b.replicate(d)...)

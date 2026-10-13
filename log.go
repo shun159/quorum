@@ -12,54 +12,88 @@ type Entry struct {
 	Config *Config
 }
 
-// raftLog is the entries of a member, the first at index 1. It is a value:
-// appending past its end leaves the entries of an older copy as they are,
-// and a change within it makes a new slice.
-type raftLog []Entry
+// raftLog is the log of a member: its entries after start, those up to
+// start replaced by a snapshot, which records the term of the last of them
+// and the configuration in force then. Without a snapshot, start is 0, and
+// the first entry is at index 1.
+//
+// It is a value: appending past its end leaves the entries of an older
+// copy as they are, and a change within it makes a new slice.
+type raftLog struct {
+	start       uint64
+	startTerm   uint64
+	startConfig Config
+	entries     []Entry
+}
 
-func (l raftLog) lastIndex() uint64 { return uint64(len(l)) }
+// logOf is the log of entries from index 1 on.
+func logOf(entries ...Entry) raftLog { return raftLog{entries: entries} }
+
+func (l raftLog) lastIndex() uint64 { return l.start + uint64(len(l.entries)) }
 
 func (l raftLog) lastTerm() uint64 { return l.termAt(l.lastIndex()) }
 
-// termAt returns the term of the entry at index i, or 0 if there is none.
+// termAt returns the term of the entry at index i, or 0 if the log has no
+// entry there, nor the snapshot the last one.
 func (l raftLog) termAt(i uint64) uint64 {
-	if i == 0 || i > l.lastIndex() {
+	switch {
+	case i == l.start:
+		return l.startTerm
+	case i < l.start || i > l.lastIndex():
 		return 0
 	}
-	return l[i-1].Term
+	return l.entries[i-l.start-1].Term
 }
 
-// at returns the entry at index i, which must be in the log.
-func (l raftLog) at(i uint64) Entry { return l[i-1] }
+// at returns the entry at index i, which must be in the log, past start.
+func (l raftLog) at(i uint64) Entry { return l.entries[i-l.start-1] }
+
+// add returns the log with e appended.
+func (l raftLog) add(e Entry) raftLog {
+	l.entries = append(l.entries, e)
+	return l
+}
 
 // has reports whether the log holds the entry of term at index, as the
-// leader's does: the log matches the leader's up to there. Every log has
-// the empty entry 0.
+// leader's does: the log matches the leader's up to there. Up to start,
+// the entries are committed, the same in every log that has them.
 func (l raftLog) has(index, term uint64) bool {
-	return index == 0 || (index <= l.lastIndex() && l.termAt(index) == term)
+	return index < l.start || (index <= l.lastIndex() && l.termAt(index) == term)
 }
 
-// from returns a copy of the entries from index i on, at most max, for a
-// message: what is sent must not change after.
+// from returns a copy of the entries from index i on, past start, at most
+// max, for a message: what is sent must not change after.
 func (l raftLog) from(i uint64, max int) []Entry {
 	if i > l.lastIndex() {
 		return nil
 	}
-	return slices.Clone(l[i-1 : min(len(l), int(i-1)+max)])
+	first := i - l.start - 1
+	return slices.Clone(l.entries[first:min(uint64(len(l.entries)), first+uint64(max))])
+}
+
+// upTo returns the entries after start up to index i.
+func (l raftLog) upTo(i uint64) []Entry {
+	return l.entries[:min(uint64(len(l.entries)), i-min(i, l.start))]
 }
 
 // merge returns the log with the leader's entries after index prev, which
 // the log has, and the index from which it changed, 0 if it did not. An
 // entry it holds already is kept; from the first that differs in term, the
-// log takes the leader's instead of its own.
+// log takes the leader's instead of its own. Those up to start, it has.
 func (l raftLog) merge(prev uint64, entries []Entry) (raftLog, uint64) {
+	if prev < l.start {
+		skip := min(l.start-prev, uint64(len(entries)))
+		prev, entries = prev+skip, entries[skip:]
+	}
 	for k, e := range entries {
 		i := prev + 1 + uint64(k)
 		if i > l.lastIndex() {
-			return append(l, entries[k:]...), i
+			l.entries = append(l.entries, entries[k:]...)
+			return l, i
 		}
 		if l.termAt(i) != e.Term {
-			return append(slices.Clip(l[:i-1]), entries[k:]...), i
+			l.entries = append(slices.Clip(l.entries[:i-l.start-1]), entries[k:]...)
+			return l, i
 		}
 	}
 	return l, 0
@@ -74,4 +108,16 @@ func (l raftLog) notAheadOf(lastIndex, lastTerm uint64) bool {
 		return l.lastTerm() < lastTerm
 	}
 	return l.lastIndex() <= lastIndex
+}
+
+// config returns the latest configuration in the log, which is in force
+// once appended, committed or not, and its index; the empty one, at 0,
+// before the group is founded.
+func (l raftLog) config() (Config, uint64) {
+	for i := len(l.entries) - 1; i >= 0; i-- {
+		if c := l.entries[i].Config; c != nil {
+			return *c, l.start + uint64(i) + 1
+		}
+	}
+	return l.startConfig, l.start
 }

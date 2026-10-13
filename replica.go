@@ -89,7 +89,7 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		state:    b.spec.Machine.Init(),
 		term:     saved.State.Term,
 		votedFor: saved.State.VotedFor,
-		log:      raftLog(saved.Log),
+		log:      logOf(saved.Log...),
 	}
 	d.logChanged()
 	d.stable = d.log.lastIndex()
@@ -124,7 +124,7 @@ func (d *replica[S]) left() bool {
 
 // logChanged keeps the configuration of the member that of its log.
 func (d *replica[S]) logChanged() {
-	d.config, d.configAt = d.log.config(), d.log.configAt()
+	d.config, d.configAt = d.log.config()
 }
 
 func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.Event) (role, replica[S], []actor.Effect) {

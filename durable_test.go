@@ -22,7 +22,7 @@ func member(t *testing.T) (behaviour[int, int, int], replica[int]) {
 		t.Fatal(err)
 	}
 	config := Config{Voters: []proc.PID{ida, idb, idc}}
-	d.log, d.config = raftLog{{Config: &config}}, config
+	d.log, d.config = logOf(Entry{Config: &config}), config
 	d.saved, d.stable = d.seq, 1 // founded, and saved
 	return b, d
 }

@@ -89,7 +89,7 @@ func TestRestartWithoutStorage(t *testing.T) {
 func TestNonVoterRefuses(t *testing.T) {
 	b, d := member(t)
 	config := Config{Voters: []proc.PID{ida, idc}, Learners: []proc.PID{idb}}
-	d.log, d.config = raftLog{{Config: &config}}, config
+	d.log, d.config = logOf(Entry{Config: &config}), config
 
 	_, d2, effs := b.HandleEvent(follower, d, genstatem.Info{Msg: requestVote{Term: 1, Candidate: ida, LastIndex: 1}})
 	_, _, effs = b.HandleEvent(follower, d2, genstatem.Info{Msg: memDurable{written(t, effs)}})
@@ -178,7 +178,7 @@ func TestRemoveLastVoter(t *testing.T) {
 func TestOneChangeAtATime(t *testing.T) {
 	b, d := member(t)
 	d.term, d.commit = 1, 1
-	d.log = append(d.log, Entry{Term: 1, Config: &Config{Voters: []proc.PID{ida, idb, idc, proc.NewNode("d").NewPID()}}})
+	d.log = d.log.add(Entry{Term: 1, Config: &Config{Voters: []proc.PID{ida, idb, idc, proc.NewNode("d").NewPID()}}})
 	d.logChanged() // a change appended, not committed
 	call := genstatem.Call{Req: removeMember{"c"}}
 	if _, _, effs := b.HandleEvent(leader, d, call); len(effs) != 1 || effs[0] != call.Reply(busy{}) {

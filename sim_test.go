@@ -31,7 +31,7 @@ type group struct {
 	storage map[string]*memStorage
 
 	leaders   map[uint64]string // the leader seen in each term
-	committed raftLog           // the longest log seen committed
+	committed []Entry           // what was seen committed, from index 1
 
 	due *crashLater // a crash to come, amid the steps of a run
 }
@@ -234,7 +234,7 @@ func (g *group) check() error {
 		if !ok {
 			continue
 		}
-		for _, err := range []error{g.checkLeader(m, r, d), g.checkCommitted(m, d), checkApplied(m, d)} {
+		for _, err := range []error{g.checkLeader(m, r, d), g.checkCommitted(m, d), g.checkApplied(m, d)} {
 			if err != nil {
 				return err
 			}
@@ -255,18 +255,20 @@ func (g *group) checkLeader(m string, r role, d replica[int]) error {
 	return nil
 }
 
-// checkCommitted checks that what is committed never changes: the log a
-// member has committed is the start of the longest seen committed, or
-// starts with it.
+// checkCommitted checks that what is committed never changes: each entry
+// a member has committed is the one seen committed at its index before,
+// if any. A member's entries in its snapshot it does not have.
 func (g *group) checkCommitted(m string, d replica[int]) error {
-	mine := d.log[:d.commit]
-	for i := range min(len(mine), len(g.committed)) {
-		if !sameEntry(mine[i], g.committed[i]) {
-			return fmt.Errorf("%s committed %+v at index %d, where %+v was", m, mine[i], i+1, g.committed[i])
+	for k, e := range d.log.upTo(d.commit) {
+		i := d.log.start + uint64(k) // the index of e, less one
+		switch {
+		case i < uint64(len(g.committed)):
+			if !sameEntry(e, g.committed[i]) {
+				return fmt.Errorf("%s committed %+v at index %d, where %+v was", m, e, i+1, g.committed[i])
+			}
+		case i == uint64(len(g.committed)):
+			g.committed = append(g.committed, e)
 		}
-	}
-	if len(mine) > len(g.committed) {
-		g.committed = slices.Clone(mine)
 	}
 	return nil
 }
@@ -281,10 +283,11 @@ func sameEntry(a, b Entry) bool {
 		slices.Equal(a.Config.Voters, b.Config.Voters) && slices.Equal(a.Config.Learners, b.Config.Learners)
 }
 
-// checkApplied checks that the state of a member is what it applied.
-func checkApplied(m string, d replica[int]) error {
+// checkApplied checks that the state of a member is what it applied: the
+// sum of the commands committed up to there.
+func (g *group) checkApplied(m string, d replica[int]) error {
 	sum := 0
-	for _, e := range d.log[:d.applied] {
+	for _, e := range g.committed[:min(d.applied, uint64(len(g.committed)))] {
 		if n, ok := e.Cmd.(int); ok {
 			sum += n
 		}

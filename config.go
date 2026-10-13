@@ -32,18 +32,6 @@ func (c Config) members() []proc.PID {
 	return append(slices.Clone(c.Voters), c.Learners...)
 }
 
-// config returns the latest configuration in the log, which is in force
-// once appended, committed or not; the empty one, before the group is
-// founded.
-func (l raftLog) config() Config {
-	for i := len(l) - 1; i >= 0; i-- {
-		if l[i].Config != nil {
-			return *l[i].Config
-		}
-	}
-	return Config{}
-}
-
 // on returns the member on node, if any.
 func (c Config) on(node string) (proc.PID, bool) {
 	for _, id := range c.members() {
@@ -74,14 +62,4 @@ func (c Config) without(id proc.PID) Config {
 		Voters:   slices.DeleteFunc(slices.Clone(c.Voters), other),
 		Learners: slices.DeleteFunc(slices.Clone(c.Learners), other),
 	}
-}
-
-// configAt returns the index of the latest configuration in the log.
-func (l raftLog) configAt() uint64 {
-	for i := len(l) - 1; i >= 0; i-- {
-		if l[i].Config != nil {
-			return uint64(i) + 1
-		}
-	}
-	return 0
 }

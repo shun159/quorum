@@ -16,7 +16,7 @@ const maxEntries = 64
 // others, and starts beating.
 func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
 	d.leader, d.votes = d.id, nil
-	d.log = append(d.log, Entry{Term: d.term})
+	d.log = d.log.add(Entry{Term: d.term})
 	d.peers, d.round = nil, 0
 	for _, id := range d.others() {
 		d.peers = append(d.peers, peer{id: id, next: d.log.lastIndex()})
