@@ -29,6 +29,12 @@ type Spec[S, Cmd, Rep any] struct {
 // DefaultElectionTimeout is Spec.ElectionTimeout when zero.
 const DefaultElectionTimeout = 300 * time.Millisecond
 
+// replicaName is the name of the member of group on each node.
+func replicaName(group string) string { return "quorum/" + group }
+
+// majority is how many members make a majority of the group.
+func (spec Spec[S, Cmd, Rep]) majority() int { return len(spec.Members)/2 + 1 }
+
 // withDefaults returns spec with its zero durations set.
 func (spec Spec[S, Cmd, Rep]) withDefaults() Spec[S, Cmd, Rep] {
 	if spec.ElectionTimeout == 0 {
