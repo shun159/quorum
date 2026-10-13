@@ -41,6 +41,7 @@ type replica[S any] struct {
 	votes   []string  // granted to it, as a candidate
 	peers   []peer    // the others, as the leader
 	pending []pending // commands to reply to, as the leader, by index
+	round   uint64    // of the checks of the quorum, as the leader
 }
 
 // peer is what the leader knows of the log of another member.
@@ -48,6 +49,8 @@ type peer struct {
 	name  string
 	next  uint64 // the index of the next entry to send it
 	match uint64 // the last index known to match the leader's
+
+	heardIn uint64 // the round of the check the leader last heard from it in
 }
 
 // pending is a command the leader appended, to reply to once applied.
@@ -93,6 +96,10 @@ func (b behaviour[S, Cmd, Rep]) HandleEvent(r role, d replica[S], ev genstatem.E
 		return b.enter(r, e.Old, d)
 	case genstatem.StateTimeout:
 		return b.timeout(r, d)
+	case genstatem.Timeout:
+		if e.Name == (checkQuorum{}) {
+			return b.checkQuorum(r, d)
+		}
 	case genstatem.Call:
 		return b.call(r, d, e)
 	case genstatem.Info:

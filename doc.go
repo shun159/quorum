@@ -14,7 +14,11 @@
 //
 // A Machine that also implements [Leader] learns when its member becomes
 // the leader, and when it stops being one: to run something on one node of
-// the group only, a singleton.
+// the group only, a singleton. A leader that has not heard from a majority
+// within ElectionTimeout steps down, as etcd's CheckQuorum has it: cut off,
+// it surrenders soon after the others could elect another, not when it
+// hears of them again. Two members may still lead at once for that short
+// while; what a leader does outside the group should carry its term.
 //
 // # What there is not yet
 //

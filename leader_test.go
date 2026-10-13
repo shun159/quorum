@@ -89,8 +89,8 @@ func TestElected(t *testing.T) {
 	}
 }
 
-// A leader cut off keeps leading until it hears of a later term: healed,
-// it surrenders to the leader the others elected meanwhile.
+// A leader cut off from the others surrenders, not hearing from a
+// majority, while they elect another.
 func TestSurrendered(t *testing.T) {
 	g, p := newWatchedGroup(t, 1, three)
 	g.run(2 * time.Second)
@@ -100,19 +100,16 @@ func TestSurrendered(t *testing.T) {
 
 	g.s.Partition([]string{old}, without(three, slices.Index(three, old)))
 	g.run(2 * time.Second)
-	if len(told(g, p, "surrendered")) != 0 {
-		t.Fatal("surrendered while cut off")
+	if got, want := told(g, p, "surrendered"), []seen{{Kind: "surrendered", Node: old}}; !slices.Equal(got, want) {
+		t.Errorf("surrendered %v, want %v", got, want)
 	}
-
-	g.s.Heal()
-	g.run(time.Second)
+	if r, _, _ := g.member(old); r == leader {
+		t.Errorf("%s still leads, cut off", old)
+	}
 	l, _ := g.leader()
 	_, d, _ = g.member(l)
 	if l == old || d.term <= oldTerm {
 		t.Fatalf("leader %s of term %d, after %s of term %d", l, d.term, old, oldTerm)
-	}
-	if got, want := told(g, p, "surrendered"), []seen{{Kind: "surrendered", Node: old}}; !slices.Equal(got, want) {
-		t.Errorf("surrendered %v, want %v", got, want)
 	}
 	if got := told(g, p, "elected"); len(got) != 2 || got[1] != (seen{Kind: "elected", Node: l, Term: d.term}) {
 		t.Errorf("elected %v", got)
@@ -134,4 +131,47 @@ func TestEffectsOnLeader(t *testing.T) {
 	if got := told(g, p, "applied"); !slices.Equal(got, want) {
 		t.Errorf("applied %v, want %v", got, want)
 	}
+}
+
+// A leader cut off surrenders at most ElectionTimeout/checksPerTimeout
+// after the others elect another: two members never lead at once longer.
+func TestLeadersOverlap(t *testing.T) {
+	bound := DefaultElectionTimeout / checksPerTimeout
+	for seed := range uint64(20) {
+		g := newGroup(t, seed, three)
+		g.run(2 * time.Second)
+		old, _ := g.leader()
+		g.s.Partition([]string{old}, without(three, slices.Index(three, old)))
+
+		var since time.Time // two members lead since then
+		var longest time.Duration
+		err := g.s.Run(2*time.Second, func() error {
+			if g.leading() < 2 {
+				since = time.Time{}
+				return g.check()
+			}
+			if since.IsZero() {
+				since = g.s.Now()
+			}
+			longest = max(longest, g.s.Now().Sub(since))
+			return g.check()
+		})
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+		if longest >= bound {
+			t.Errorf("seed %d: two members led at once for %v, not under %v", seed, longest, bound)
+		}
+	}
+}
+
+// leading counts the members that are leaders, of any term.
+func (g *group) leading() int {
+	count := 0
+	for _, m := range g.members {
+		if r, _, ok := g.member(m); ok && r == leader {
+			count++
+		}
+	}
+	return count
 }

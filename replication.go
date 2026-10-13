@@ -16,11 +16,11 @@ const maxEntries = 64
 func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
 	d.leader, d.votes = d.self, nil
 	d.log = append(d.log, entry{Term: d.term})
-	d.peers = nil
+	d.peers, d.round = nil, 0
 	for _, m := range b.others(*d) {
 		d.peers = append(d.peers, peer{name: m, next: d.log.lastIndex()})
 	}
-	effs := []actor.Effect{genstatem.StartStateTimeout{After: b.spec.Heartbeat}}
+	effs := []actor.Effect{genstatem.StartStateTimeout{After: b.spec.Heartbeat}, b.quorumTimer()}
 	if l, ok := b.spec.Machine.(Leader[S]); ok {
 		effs = append(effs, l.Elected(d.state, d.term)...)
 	}
@@ -31,7 +31,7 @@ func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
 // surrender ends the leadership of the member. The commands it waits on
 // may be applied or not, which it cannot know: it tells their clients so.
 func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
-	var effs []actor.Effect
+	effs := []actor.Effect{genstatem.CancelTimeout{Name: checkQuorum{}}}
 	for _, p := range d.pending {
 		effs = append(effs, actor.Reply{To: p.from, Value: deposed{}})
 	}
@@ -102,6 +102,7 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 	if p == nil {
 		return r, d, nil
 	}
+	d.heard(p)
 	if !m.Success {
 		p.next = max(1, min(p.next-1, m.LastIndex+1))
 		return r, d, actor.Do(b.appendTo(d, *p))
