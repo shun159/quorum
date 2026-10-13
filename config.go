@@ -43,3 +43,45 @@ func (l raftLog) config() Config {
 	}
 	return Config{}
 }
+
+// on returns the member on node, if any.
+func (c Config) on(node string) (proc.PID, bool) {
+	for _, id := range c.members() {
+		if id.Node() == node {
+			return id, true
+		}
+	}
+	return proc.PID{}, false
+}
+
+// withLearner returns c with id as a learner.
+func (c Config) withLearner(id proc.PID) Config {
+	return Config{Voters: slices.Clone(c.Voters), Learners: append(slices.Clone(c.Learners), id)}
+}
+
+// promoted returns c with the learner id a voter.
+func (c Config) promoted(id proc.PID) Config {
+	return Config{
+		Voters:   append(slices.Clone(c.Voters), id),
+		Learners: slices.DeleteFunc(slices.Clone(c.Learners), func(x proc.PID) bool { return x == id }),
+	}
+}
+
+// without returns c without id.
+func (c Config) without(id proc.PID) Config {
+	other := func(x proc.PID) bool { return x == id }
+	return Config{
+		Voters:   slices.DeleteFunc(slices.Clone(c.Voters), other),
+		Learners: slices.DeleteFunc(slices.Clone(c.Learners), other),
+	}
+}
+
+// configAt returns the index of the latest configuration in the log.
+func (l raftLog) configAt() uint64 {
+	for i := len(l) - 1; i >= 0; i-- {
+		if l[i].Config != nil {
+			return uint64(i) + 1
+		}
+	}
+	return 0
+}

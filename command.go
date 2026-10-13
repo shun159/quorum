@@ -24,8 +24,9 @@ func Child[S, Cmd, Rep any](spec Spec[S, Cmd, Rep]) gen.Child {
 // before it could tell: the command may have been applied, or not.
 var ErrLeaderChanged = errors.New("quorum: the leader changed; the command may have been applied or not")
 
-// retryAfter is how long Command waits before asking again, when no
-// member knows the leader, during an election.
+// retryAfter is how long a client waits before asking again, when no
+// member knows the leader, during an election, or the leader is busy with
+// a change of members.
 const retryAfter = 50 * time.Millisecond
 
 // Command has group apply cmd, and returns its reply. It asks the members
@@ -33,37 +34,50 @@ const retryAfter = 50 * time.Millisecond
 // committed and applied.
 //
 // An error other than ctx's means cmd may have been applied or not: its
-// leader lost its place, see ErrLeaderChanged, or could not be reached. Command
-// does not try it again, as applying it twice may differ from once.
+// leader lost its place, see ErrLeaderChanged, or could not be reached.
+// Command does not try it again, as applying it twice may differ from once.
 func Command[Rep, Cmd any](ctx context.Context, caller actor.Caller, group string, nodes []string, cmd Cmd) (Rep, error) {
 	var zero Rep
+	v, err := ask(ctx, caller, group, nodes, command{cmd})
+	if err != nil {
+		return zero, err
+	}
+	rep, _ := v.(applied).Rep.(Rep)
+	return rep, nil
+}
+
+// ask sends req to the leader of group, found among the members on nodes,
+// and returns what it replied once done: applied, or an error. A member
+// that is not the leader tells where it is, if it knows; the leader busy
+// with a change of members has the request wait for it.
+func ask(ctx context.Context, caller actor.Caller, group string, nodes []string, req any) (any, error) {
 	next := nodes[0]
 	for i := 1; ; i++ {
-		v, err := actor.Call(ctx, caller, actor.Remote{Node: next, Name: replicaName(group)}, command{cmd})
+		v, err := actor.Call(ctx, caller, actor.Remote{Node: next, Name: replicaName(group)}, req)
 		switch {
 		case errors.Is(err, proc.NoProc):
 			// No member there, which took nothing: ask the next.
 			next = nodes[i%len(nodes)]
 			continue
 		case err != nil:
-			return zero, err
+			return nil, err
 		}
 		switch r := v.(type) {
 		case applied:
-			rep, _ := r.Rep.(Rep)
-			return rep, nil
+			return r, nil
 		case deposed:
-			return zero, ErrLeaderChanged
+			return nil, ErrLeaderChanged
 		case rejected:
-			return zero, errors.New(r.Reason)
+			return nil, errors.New(r.Reason)
 		case redirect:
-			next = r.Leader
-			if next == "" {
-				next = nodes[i%len(nodes)]
-				if err := pause(ctx, retryAfter); err != nil {
-					return zero, err
-				}
+			if next = r.Leader; next != "" {
+				continue
 			}
+			next = nodes[i%len(nodes)]
+		}
+		// No leader known yet, or the leader busy: wait a little.
+		if err := pause(ctx, retryAfter); err != nil {
+			return nil, err
 		}
 	}
 }
@@ -87,6 +101,8 @@ func (b behaviour[S, Cmd, Rep]) call(r role, d replica[S], c genstatem.Call) (ro
 		return r, d, d.after(c.Reply(identity{ID: d.id, Blank: d.log.lastIndex() == 0}))
 	case found:
 		return b.found(r, d, c, m)
+	case addMember, removeMember:
+		return b.change(r, d, c, m)
 	}
 	return r, d, nil
 }

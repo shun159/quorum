@@ -12,7 +12,7 @@ import (
 func TestUnfounded(t *testing.T) {
 	g := unfounded(t, 1, three, func(string) Machine[int, int, int] { return counter{} })
 	g.run(2 * time.Second)
-	if l, ok := g.leader(); ok {
+	if l, ok := g.anyLeader(); ok {
 		t.Fatalf("%s leads a group never founded", l)
 	}
 	v, err := g.s.Call(g.at("a"), command{1})
@@ -98,5 +98,90 @@ func TestNonVoterRefuses(t *testing.T) {
 	}
 	if r, _, _ := b.HandleEvent(follower, d, genstatem.StateTimeout{}); r != follower {
 		t.Errorf("a learner stood: %v", r)
+	}
+}
+
+// The swap of a node: its member lost with its disk, the node comes back
+// blank; removed, then added again under the same name, the member catches
+// up as a learner and votes again, as the one before it did.
+func TestNodeSwap(t *testing.T) {
+	g := newGroup(t, 1, three)
+	for range 3 {
+		if _, err := g.command(1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g.loseDisk("c")
+	g.restart("c")
+	if _, err := g.ask(removeMember{"c"}); err != nil {
+		t.Fatalf("remove c: %v", err)
+	}
+	if _, err := g.ask(addMember{g.identify("c")}); err != nil {
+		t.Fatalf("add c: %v", err)
+	}
+	g.run(2 * time.Second)
+
+	_, d, _ := g.member("c")
+	if !d.config.isVoter(d.id) || d.state != 3 {
+		t.Fatalf("c: voter %v, holds %d, want a voter holding 3", d.config.isVoter(d.id), d.state)
+	}
+	// c counts again: with a gone, b and c are a majority.
+	g.crash("a", 0)
+	g.run(2 * time.Second)
+	if sum, err := g.command(1); err != nil || sum != 4 {
+		t.Errorf("command without a: %d, %v", sum, err)
+	}
+}
+
+// A node with a member keeps it until it is removed: the member of a new
+// disk is not added in its place.
+func TestAddOverMember(t *testing.T) {
+	g := newGroup(t, 1, three)
+	g.loseDisk("c")
+	g.restart("c")
+	if _, err := g.ask(addMember{g.identify("c")}); err == nil {
+		t.Error("added c over the member of c")
+	}
+}
+
+// The leader removed steps down once the removal is committed, and the
+// others go on.
+func TestRemoveLeader(t *testing.T) {
+	g := newGroup(t, 1, three)
+	g.run(2 * time.Second)
+	old := g.leader()
+	if _, err := g.ask(removeMember{old}); err != nil {
+		t.Fatalf("remove %s: %v", old, err)
+	}
+	g.run(2 * time.Second)
+	if r, d, _ := g.member(old); r == leader || d.config.has(d.id) {
+		t.Errorf("%s removed: %v, in %v", old, r, d.config)
+	}
+	l := g.leader()
+	if l == old {
+		t.Fatalf("leader %q after removing %s", l, old)
+	}
+	if sum, err := g.command(1); err != nil || sum != 1 {
+		t.Errorf("command after: %d, %v", sum, err)
+	}
+}
+
+// The last voter cannot be removed.
+func TestRemoveLastVoter(t *testing.T) {
+	g := newGroup(t, 1, []string{"a"})
+	if _, err := g.ask(removeMember{"a"}); err == nil {
+		t.Error("removed the last voter")
+	}
+}
+
+// A change waits for the one before it to be committed.
+func TestOneChangeAtATime(t *testing.T) {
+	b, d := member(t)
+	d.term, d.commit = 1, 1
+	d.log = append(d.log, Entry{Term: 1, Config: &Config{Voters: []proc.PID{ida, idb, idc, proc.NewNode("d").NewPID()}}})
+	d.logChanged() // a change appended, not committed
+	call := genstatem.Call{Req: removeMember{"c"}}
+	if _, _, effs := b.HandleEvent(leader, d, call); len(effs) != 1 || effs[0] != call.Reply(busy{}) {
+		t.Errorf("a second change: %v", effs)
 	}
 }

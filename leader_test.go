@@ -82,7 +82,7 @@ func told(g *group, p proc.PID, kind string) []seen {
 func TestElected(t *testing.T) {
 	g, p := newWatchedGroup(t, 1, three)
 	g.run(2 * time.Second)
-	l, _ := g.leader()
+	l := g.leader()
 	_, d, _ := g.member(l)
 	if got, want := told(g, p, "elected"), []seen{{Kind: "elected", Node: l, Term: d.term}}; !slices.Equal(got, want) {
 		t.Errorf("elected %v, want %v", got, want)
@@ -94,7 +94,7 @@ func TestElected(t *testing.T) {
 func TestSurrendered(t *testing.T) {
 	g, p := newWatchedGroup(t, 1, three)
 	g.run(2 * time.Second)
-	old, _ := g.leader()
+	old := g.leader()
 	_, d, _ := g.member(old)
 	oldTerm := d.term
 
@@ -106,7 +106,7 @@ func TestSurrendered(t *testing.T) {
 	if r, _, _ := g.member(old); r == leader {
 		t.Errorf("%s still leads, cut off", old)
 	}
-	l, _ := g.leader()
+	l := g.leader()
 	_, d, _ = g.member(l)
 	if l == old || d.term <= oldTerm {
 		t.Fatalf("leader %s of term %d, after %s of term %d", l, d.term, old, oldTerm)
@@ -126,7 +126,7 @@ func TestEffectsOnLeader(t *testing.T) {
 		}
 	}
 	g.run(time.Second)
-	l, _ := g.leader()
+	l := g.leader()
 	want := []seen{{Kind: "applied", Node: l, Sum: 1}, {Kind: "applied", Node: l, Sum: 2}, {Kind: "applied", Node: l, Sum: 3}}
 	if got := told(g, p, "applied"); !slices.Equal(got, want) {
 		t.Errorf("applied %v, want %v", got, want)
@@ -140,7 +140,7 @@ func TestLeadersOverlap(t *testing.T) {
 	for seed := range uint64(20) {
 		g := newGroup(t, seed, three)
 		g.run(2 * time.Second)
-		old, _ := g.leader()
+		old := g.leader()
 		g.s.Partition([]string{old}, without(three, slices.Index(three, old)))
 
 		var since time.Time // two members lead since then

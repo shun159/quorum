@@ -80,11 +80,7 @@ func (g *group) found() {
 	g.t.Helper()
 	var config Config
 	for _, m := range g.members {
-		v, err := g.s.Call(g.at(m), identify{})
-		if err != nil {
-			g.t.Fatal(err)
-		}
-		config.Voters = append(config.Voters, v.(identity).ID)
+		config.Voters = append(config.Voters, g.identify(m))
 	}
 	for _, m := range g.members {
 		if v, err := g.s.Call(g.at(m), found{config}); err != nil || v != (applied{}) {
@@ -157,8 +153,19 @@ func (g *group) run(d time.Duration) {
 	}
 }
 
-// leader returns the member leading the latest term, if any.
-func (g *group) leader() (string, bool) {
+// leader returns the member leading the latest term: the test fails if
+// none does.
+func (g *group) leader() string {
+	g.t.Helper()
+	l, ok := g.anyLeader()
+	if !ok {
+		g.t.Fatal("no leader")
+	}
+	return l
+}
+
+// anyLeader returns the member leading the latest term, if any.
+func (g *group) anyLeader() (string, bool) {
 	var found string
 	var term uint64
 	for _, m := range g.members {
@@ -170,30 +177,52 @@ func (g *group) leader() (string, bool) {
 }
 
 // command has the group add n, as Command would, from outside the
-// simulation: it asks the members in turn until the leader applies it.
+// simulation.
 func (g *group) command(n int) (int, error) {
+	g.t.Helper()
+	v, err := g.ask(command{n})
+	if err != nil {
+		return 0, err
+	}
+	return v.(applied).Rep.(int), nil
+}
+
+// ask sends req to the leader, as ask does, from outside the simulation:
+// it asks the members in turn until the leader replies, done.
+func (g *group) ask(req any) (any, error) {
 	g.t.Helper()
 	next := g.members[0]
 	for i := 1; i <= 100; i++ { // 100 tries outlast elections
-		v, err := g.s.Call(actor.Remote{Node: next, Name: replicaName(g.name)}, command{n})
+		v, err := g.s.Call(g.at(next), req)
 		if err != nil {
 			next = g.members[i%len(g.members)]
 			continue
 		}
 		switch r := v.(type) {
 		case applied:
-			return r.Rep.(int), nil
+			return r, nil
 		case redirect:
-			next = r.Leader
-			if next == "" {
-				next = g.members[i%len(g.members)]
-				g.s.Advance(retryAfter)
+			if next = r.Leader; next != "" {
+				continue
 			}
+			next = g.members[i%len(g.members)]
+		case busy:
 		default:
-			return 0, fmt.Errorf("got %#v", v)
+			return nil, fmt.Errorf("got %#v", v)
 		}
+		g.s.Advance(retryAfter)
 	}
-	return 0, fmt.Errorf("no leader took %d", n)
+	return nil, fmt.Errorf("no leader took %#v", req)
+}
+
+// identify returns who the member on node m is.
+func (g *group) identify(m string) proc.PID {
+	g.t.Helper()
+	v, err := g.s.Call(g.at(m), identify{})
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return v.(identity).ID
 }
 
 // check checks what Raft promises, over the members running. It is
@@ -271,10 +300,7 @@ var three = []string{"a", "b", "c"}
 func TestElection(t *testing.T) {
 	g := newGroup(t, 1, three)
 	g.run(2 * time.Second)
-	l, ok := g.leader()
-	if !ok {
-		t.Fatal("no leader")
-	}
+	l := g.leader()
 	_, ld, _ := g.member(l)
 	for _, m := range three {
 		if _, d, _ := g.member(m); d.term != ld.term || d.leader.Node() != l {
@@ -306,11 +332,11 @@ func TestLeaderCrash(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	old, _ := g.leader()
+	old := g.leader()
 	g.s.Crash(old)
 	g.run(2 * time.Second)
-	l, ok := g.leader()
-	if !ok || l == old {
+	l := g.leader()
+	if l == old {
 		t.Fatalf("leader %q after %s crashed", l, old)
 	}
 	if sum, err := g.command(1); err != nil || sum != 4 {
@@ -329,7 +355,7 @@ func TestGroupOfOne(t *testing.T) {
 func TestWrongCommand(t *testing.T) {
 	g := newGroup(t, 1, three)
 	g.run(time.Second)
-	l, _ := g.leader()
+	l := g.leader()
 	v, err := g.s.Call(actor.Remote{Node: l, Name: replicaName(g.name)}, command{"one"})
 	if r, ok := v.(rejected); err != nil || !ok {
 		t.Fatalf("got %#v, %v", r, err)

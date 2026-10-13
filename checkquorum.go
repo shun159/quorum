@@ -43,10 +43,13 @@ func (b behaviour[S, Cmd, Rep]) checkQuorum(r role, d replica[S]) (role, replica
 func (d *replica[S]) heard(p *peer) { p.heardIn = d.round }
 
 // heardFrom counts the voters the leader heard from in the last
-// checksPerTimeout rounds, itself included. A leader just elected counts
-// them all, their votes the latest it heard.
+// checksPerTimeout rounds, itself included if it votes. A leader just
+// elected counts them all, their votes the latest it heard.
 func (d *replica[S]) heardFrom() int {
-	count := 1
+	count := 0
+	if d.config.isVoter(d.id) {
+		count++
+	}
 	for _, p := range d.peers {
 		if d.config.isVoter(p.id) && d.round-p.heardIn < checksPerTimeout {
 			count++

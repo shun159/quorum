@@ -14,7 +14,7 @@ func TestFollowerRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	l, _ := g.leader()
+	l := g.leader()
 	f := without(three, slices.Index(three, l))[0]
 	g.crash(f, 0)
 	for range 2 {
@@ -38,7 +38,7 @@ func TestLeaderRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	old, _ := g.leader()
+	old := g.leader()
 	g.crash(old, 0)
 	g.run(2 * time.Second)
 	if sum, err := g.command(1); err != nil || sum != 4 {

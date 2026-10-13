@@ -8,7 +8,7 @@ import (
 func init() {
 	dist.Register(requestVote{}, voteReply{}, appendEntries{}, appendReply{},
 		command{}, applied{}, redirect{}, deposed{}, rejected{},
-		identify{}, identity{}, found{}, Config{})
+		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{})
 }
 
 // The messages between the members of a group, the RPCs of Raft, sent as
@@ -77,4 +77,12 @@ type (
 		Blank bool // its log is empty: no group has it yet
 	}
 	found struct{ Config Config }
+)
+
+// A change of the members, from a client, and the reply that it must wait
+// for the change before.
+type (
+	addMember    struct{ ID proc.PID }
+	removeMember struct{ Node string }
+	busy         struct{} // not appended: a change is under way
 )

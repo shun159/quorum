@@ -25,7 +25,9 @@
 // Who the members are is in the log, a [Config] of voters and learners:
 // a majority of the voters elects the leader and commits. [Found] founds
 // a group once, its first configuration written alike into the logs of
-// its first members.
+// its first members. [AddMember] adds a member as a learner, which the
+// leader makes a voter once it has caught up, and [RemoveMember] removes
+// one; a change of members waits for the one before it.
 //
 // A member is known by the PID it first had on its storage, blank. It
 // keeps its identity, its term, its vote and its log in a [Storage], and,
@@ -33,11 +35,11 @@
 // acknowledges entries, once they are durable there. On a new disk, or
 // without a storage, a member restarted is another, in no configuration:
 // it neither votes nor stands, nor takes what is sent to the one before
-// it, until the group has it.
+// it. To swap the disk of a node, remove its member, then add the new one.
 //
 // # What there is not yet
 //
-// Members cannot be added and removed yet: a member on a new disk waits
-// for good. There are no snapshots, and a read is a command, committed as
-// any other.
+// There are no snapshots: a member added catches up from the first entry
+// of the log, which grows for good. A read is a command, committed as any
+// other.
 package quorum

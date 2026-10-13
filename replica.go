@@ -33,11 +33,12 @@ type replica[S any] struct {
 	votedFor proc.PID // in term, if it voted
 	leader   proc.PID // of term, once known
 
-	log     raftLog
-	config  Config // the latest in the log
-	commit  uint64 // the last index known committed
-	applied uint64 // the last index applied to state
-	state   S      // of the machine
+	log      raftLog
+	config   Config // the latest in the log
+	configAt uint64 // its index
+	commit   uint64 // the last index known committed
+	applied  uint64 // the last index applied to state
+	state    S      // of the machine
 
 	votes   []proc.PID // granted to it, as a candidate
 	peers   []peer     // the other members, as the leader
@@ -90,7 +91,7 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		votedFor: saved.State.VotedFor,
 		log:      raftLog(saved.Log),
 	}
-	d.config = d.log.config()
+	d.logChanged()
 	d.stable = d.log.lastIndex()
 	if !d.id.IsZero() {
 		return follower, d, nil, nil
@@ -108,6 +109,25 @@ func seed(group, self string) uint64 {
 }
 
 func (b behaviour[S, Cmd, Rep]) HandleEvent(r role, d replica[S], ev genstatem.Event) (role, replica[S], []actor.Effect) {
+	r, d, effs := b.handleEvent(r, d, ev)
+	if _, entering := ev.(genstatem.Enter[role]); !entering && r == leader && d.left() {
+		return follower, d, effs
+	}
+	return r, d, effs
+}
+
+// left reports whether the member is out of the group, and that is
+// committed: a leader that removed itself steps down then.
+func (d *replica[S]) left() bool {
+	return !d.config.has(d.id) && d.configAt <= d.commit
+}
+
+// logChanged keeps the configuration of the member that of its log.
+func (d *replica[S]) logChanged() {
+	d.config, d.configAt = d.log.config(), d.log.configAt()
+}
+
+func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.Event) (role, replica[S], []actor.Effect) {
 	switch e := ev.(type) {
 	case genstatem.Enter[role]:
 		return b.enter(r, e.Old, d)

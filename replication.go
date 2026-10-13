@@ -90,7 +90,8 @@ func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntr
 	}
 	log, changed := d.log.merge(m.PrevIndex, m.Entries)
 	if changed > 0 {
-		d.log, d.config = log, log.config()
+		d.log = log
+		d.logChanged()
 		effs = append(effs, b.saveLog(&d, changed)...)
 	}
 	match := m.PrevIndex + uint64(len(m.Entries))
@@ -117,11 +118,12 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 	}
 	p.match = max(p.match, m.Match)
 	p.next = max(p.next, p.match+1)
+	progress := *p
 	effs := b.commit(r, &d)
-	if p.next <= d.log.lastIndex() {
-		effs = append(effs, b.appendTo(d, *p))
+	if progress.next <= d.log.lastIndex() {
+		effs = append(effs, b.appendTo(d, progress))
 	}
-	return r, d, effs
+	return r, d, append(effs, b.promote(r, &d, progress)...)
 }
 
 // peer returns the progress of the member id, in a copy of the peers the
@@ -143,6 +145,7 @@ func (b behaviour[S, Cmd, Rep]) commit(r role, d *replica[S]) []actor.Effect {
 	for n := d.log.lastIndex(); n > d.commit && d.log.termAt(n) == d.term; n-- {
 		if d.holders(n) >= d.config.majority() {
 			d.commit = n
+			d.prunePeers()
 			return b.apply(r, d)
 		}
 	}
@@ -172,20 +175,23 @@ func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 	for d.applied < d.commit {
 		d.applied++
 		e := d.log.at(d.applied)
-		if e.Cmd == nil {
-			continue // the entry of an election, or a configuration
+		var rep any
+		if e.Cmd != nil { // not the entry of an election, nor a configuration
+			state, out, more := b.spec.Machine.Apply(d.state, e.Cmd.(Cmd))
+			d.state, rep = state, out
+			if r == leader {
+				effs = append(effs, more...)
+			}
 		}
-		state, rep, more := b.spec.Machine.Apply(d.state, e.Cmd.(Cmd))
-		d.state = state
 		if r == leader {
-			effs = append(effs, more...)
 			effs = append(effs, d.reply(d.applied, rep)...)
 		}
 	}
 	return effs
 }
 
-// reply answers the command at index, if the leader appended it.
+// reply answers the command or the change at index, if the leader
+// appended it.
 func (d *replica[S]) reply(index uint64, rep any) []actor.Effect {
 	if len(d.pending) == 0 || d.pending[0].index != index {
 		return nil
