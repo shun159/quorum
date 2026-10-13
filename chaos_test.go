@@ -21,10 +21,9 @@ type client struct {
 
 // outcomes are what a client knows of its commands.
 type outcomes struct {
-	acked   int  // applied, the leader said
-	unknown int  // applied or not: the leader changed, or did not answer
-	busy    bool // a command is out
-	next    int  // the member to ask
+	quorum  Client[int, int]
+	acked   int // applied, the leader said
+	unknown int // applied or not: the leader changed, or did not answer
 }
 
 type tick struct{}
@@ -32,7 +31,8 @@ type tick struct{}
 const tickEvery = 50 * time.Millisecond
 
 func (c client) Init(proc.PID) (outcomes, []actor.Effect, error) {
-	return outcomes{}, actor.Do(nextTick()), nil
+	o := outcomes{quorum: NewClient[int, int](c.group, c.members, time.Second)}
+	return o, actor.Do(nextTick()), nil
 }
 
 func nextTick() actor.Effect {
@@ -40,55 +40,37 @@ func nextTick() actor.Effect {
 }
 
 func (c client) HandleInfo(o outcomes, msg any) (outcomes, []actor.Effect) {
-	switch m := msg.(type) {
-	case tick:
+	if _, ok := msg.(tick); ok {
 		return c.tick(o)
-	case actor.Response:
-		return c.outcome(o, m), nil
 	}
-	return o, nil
+	var effs []actor.Effect
+	var res *Result[int]
+	o.quorum, effs, res = o.quorum.Handle(msg)
+	if res != nil {
+		o = c.count(o, *res)
+	}
+	return o, effs
 }
 
 // tick sends the next command, unless one is out.
 func (c client) tick(o outcomes) (outcomes, []actor.Effect) {
 	effs := actor.Do(nextTick())
-	if o.busy {
+	if o.quorum.Out() > 0 {
 		return o, effs
 	}
-	o.busy = true
-	ask := actor.SendRequest{
-		To:      actor.Remote{Node: c.members[o.next], Name: replicaName(c.group)},
-		Req:     command{1},
-		Tag:     "add",
-		Timeout: time.Second,
-	}
-	return o, append(effs, ask)
+	var ask []actor.Effect
+	o.quorum, ask = o.quorum.Command("add", 1)
+	return o, append(effs, ask...)
 }
 
-// outcome counts the reply to a command, or its failure.
-func (c client) outcome(o outcomes, m actor.Response) outcomes {
-	o.busy = false
-	switch r := m.Value.(type) {
-	case applied:
+// count counts what came of a command.
+func (c client) count(o outcomes, res Result[int]) outcomes {
+	if res.Err == nil {
 		o.acked++
-	case redirect:
-		o.next = c.memberOrNext(r.Leader, o.next)
-	default: // deposed, or no reply
+	} else {
 		o.unknown++
-		o.next = (o.next + 1) % len(c.members)
 	}
 	return o
-}
-
-// memberOrNext returns the index of member, or the one after i if member
-// is not one, as when the leader is unknown.
-func (c client) memberOrNext(member string, i int) int {
-	for j, m := range c.members {
-		if m == member {
-			return j
-		}
-	}
-	return (i + 1) % len(c.members)
 }
 
 // TestChaos has a client add to a group of three or five, while members
@@ -144,10 +126,7 @@ func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 			t.Fatalf("seed %d: %s holds %d, %s %d", seed, m, dm.state, members[0], d.state)
 		}
 	}
-	out := o.unknown
-	if o.busy {
-		out++
-	}
+	out := o.unknown + o.quorum.Out()
 	if d.state < o.acked || d.state > o.acked+out {
 		t.Fatalf("seed %d: count %d, with %d acknowledged and %d unknown", seed, d.state, o.acked, out)
 	}

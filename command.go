@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/shun159/molecule/actor"
@@ -47,39 +48,68 @@ func Command[Rep, Cmd any](ctx context.Context, caller actor.Caller, group strin
 }
 
 // ask sends req to the leader of group, found among the members on nodes,
-// and returns what it replied once done: applied, or an error. A member
-// that is not the leader tells where it is, if it knows; the leader busy
-// with a change of members has the request wait for it.
+// and returns what it replied once done: applied, or an error.
 func ask(ctx context.Context, caller actor.Caller, group string, nodes []string, req any) (any, error) {
-	next := nodes[0]
-	for i := 1; ; i++ {
-		v, err := actor.Call(ctx, caller, actor.Remote{Node: next, Name: replicaName(group)}, req)
-		switch {
-		case errors.Is(err, proc.NoProc):
-			// No member there, which took nothing: ask the next.
-			next = nodes[i%len(nodes)]
-			continue
-		case err != nil:
-			return nil, err
+	node := nodes[0]
+	for {
+		v, err := actor.Call(ctx, caller, actor.Remote{Node: node, Name: replicaName(group)}, req)
+		ans := answerOf(nodes, node, v, err)
+		if ans.done {
+			return ans.v, ans.err
 		}
-		switch r := v.(type) {
-		case applied:
-			return r, nil
-		case deposed:
-			return nil, ErrLeaderChanged
-		case rejected:
-			return nil, errors.New(r.Reason)
-		case redirect:
-			if next = r.Leader; next != "" {
-				continue
+		node = ans.node
+		if ans.pause {
+			if err := pause(ctx, retryAfter); err != nil {
+				return nil, err
 			}
-			next = nodes[i%len(nodes)]
-		}
-		// No leader known yet, or the leader busy: wait a little.
-		if err := pause(ctx, retryAfter); err != nil {
-			return nil, err
 		}
 	}
+}
+
+// answer is what a client makes of a member's answer to a request: it is
+// done, with v or err; or to be asked again of the member on node, at
+// once or after a pause.
+type answer struct {
+	done  bool
+	v     any
+	err   error
+	node  string
+	pause bool
+}
+
+// answerOf returns what to make of v or err, the answer of the member on
+// node, one of nodes or not. A member that is not the leader tells where
+// it is, if it knows; the leader busy with a change of members has the
+// request wait for it.
+func answerOf(nodes []string, node string, v any, err error) answer {
+	switch {
+	case errors.Is(err, proc.NoProc):
+		// No member there, which took nothing: ask the next.
+		return answer{node: nextOf(nodes, node)}
+	case err != nil:
+		return answer{done: true, err: err}
+	}
+	switch r := v.(type) {
+	case applied:
+		return answer{done: true, v: r}
+	case deposed:
+		return answer{done: true, err: ErrLeaderChanged}
+	case rejected:
+		return answer{done: true, err: errors.New(r.Reason)}
+	case redirect:
+		if r.Leader == "" {
+			// No leader known, as during an election: ask the next in a while.
+			return answer{node: nextOf(nodes, node), pause: true}
+		}
+		return answer{node: r.Leader}
+	}
+	return answer{node: node, pause: true} // busy
+}
+
+// nextOf returns the node after node in nodes, the first if node is not
+// one of them.
+func nextOf(nodes []string, node string) string {
+	return nodes[(slices.Index(nodes, node)+1)%len(nodes)]
 }
 
 func pause(ctx context.Context, d time.Duration) error {

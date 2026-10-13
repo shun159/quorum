@@ -12,6 +12,11 @@
 // lost while a majority of the group lives, and the leader applies it and
 // replies. A group of 2f+1 members bears f of them failing.
 //
+// [Command] sends a command and waits for its reply, which the callbacks
+// of a behaviour must not do: a behaviour keeps a [Client] in its state
+// instead, whose commands are effects, and whose results come of the
+// messages it hands back to it.
+//
 // A Machine that also implements [Leader] learns when its member becomes
 // the leader, and when it stops being one: to run something on one node of
 // the group only, a singleton. A leader that has not heard from a majority
