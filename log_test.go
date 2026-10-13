@@ -9,7 +9,7 @@ import (
 func terms(ts ...uint64) raftLog {
 	var l raftLog
 	for _, t := range ts {
-		l = append(l, entry{Term: t})
+		l = append(l, Entry{Term: t})
 	}
 	return l
 }
@@ -51,7 +51,7 @@ func TestLogMerge(t *testing.T) {
 		{"heartbeat", terms(1), 1, nil, []uint64{1}},
 	} {
 		old := slices.Clone(c.log)
-		got := c.log.merge(c.prev, c.entries)
+		got, _ := c.log.merge(c.prev, c.entries)
 		if !slices.Equal(termsOf(got), c.want) {
 			t.Errorf("%s: %v, want %v", c.name, termsOf(got), c.want)
 		}

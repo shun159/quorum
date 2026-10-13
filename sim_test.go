@@ -27,9 +27,20 @@ type group struct {
 	name    string
 	members []string
 	pids    map[string]proc.PID
+	specs   map[string]Spec[int, int, int]
+	storage map[string]*memStorage
 
 	leaders   map[uint64]string // the leader seen in each term
 	committed raftLog           // the longest log seen committed
+
+	due *crashLater // a crash to come, amid the steps of a run
+}
+
+// crashLater is a crash of member after so many steps, its storage
+// keeping keep of the writes it did not know were durable.
+type crashLater struct {
+	member      string
+	steps, keep int
 }
 
 func newGroup(t *testing.T, seed uint64, members []string, opts ...gensim.Option) *group {
@@ -43,17 +54,50 @@ func newGroupOf(t *testing.T, seed uint64, members []string, machine func(node s
 	t.Helper()
 	g := &group{
 		t: t, s: gensim.New(seed, opts...), name: "g", members: members,
-		pids: map[string]proc.PID{}, leaders: map[uint64]string{},
+		pids: map[string]proc.PID{}, specs: map[string]Spec[int, int, int]{},
+		storage: map[string]*memStorage{}, leaders: map[uint64]string{},
 	}
 	for _, m := range members {
-		spec := Spec[int, int, int]{Group: g.name, Members: members, Machine: machine(m)}
-		pid, err := gensim.Start(g.s, Child(spec), gensim.On(m))
-		if err != nil {
-			t.Fatal(err)
-		}
-		g.pids[m] = pid
+		g.storage[m] = &memStorage{}
+		g.specs[m] = Spec[int, int, int]{Group: g.name, Members: members, Machine: machine(m), Storage: g.storage[m]}
+		g.start(m)
 	}
 	return g
+}
+
+// start starts the member on node m.
+func (g *group) start(m string) {
+	g.t.Helper()
+	pid, err := gensim.Start(g.s, Child(g.specs[m]), gensim.On(m))
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	g.pids[m] = pid
+}
+
+// crash crashes the node m, its storage keeping the first keep writes it
+// had not learned were durable.
+func (g *group) crash(m string, keep int) {
+	g.s.Crash(m)
+	g.storage[m].crash(keep)
+}
+
+// crashIfDue counts a step down to the crash due, and crashes then.
+func (g *group) crashIfDue() {
+	if g.due == nil {
+		return
+	}
+	if g.due.steps--; g.due.steps <= 0 {
+		g.crash(g.due.member, g.due.keep)
+		g.due = nil
+	}
+}
+
+// restart restarts the node m, crashed, and its member, with what it saved.
+func (g *group) restart(m string) {
+	g.t.Helper()
+	g.s.Restart(m)
+	g.start(m)
 }
 
 // member returns the role and data of the member on node m, if it runs.
@@ -109,8 +153,10 @@ func (g *group) command(n int) (int, error) {
 	return 0, fmt.Errorf("no leader took %d", n)
 }
 
-// check checks what Raft promises, over the members running.
+// check checks what Raft promises, over the members running. It is
+// called at every step, where a crash due comes, writes in flight.
 func (g *group) check() error {
+	g.crashIfDue()
 	for _, m := range g.members {
 		r, d, ok := g.member(m)
 		if !ok {

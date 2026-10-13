@@ -91,8 +91,8 @@ func (c client) memberOrNext(member string, i int) int {
 	return (i + 1) % len(c.members)
 }
 
-// TestChaos has a client add to a group of five, while members are cut
-// off at random and messages lost, for many seeds.
+// TestChaos has a client add to a group of three or five, while members
+// are cut off or crashed at random, and messages lost, for many seeds.
 func TestChaos(t *testing.T) {
 	for seed := range uint64(30) {
 		chaos(t, seed)
@@ -109,35 +109,39 @@ func FuzzChaos(f *testing.F) {
 	})
 }
 
-// chaos runs a group of five under partitions and lost messages, checking
-// it at every step. Once healed and quiet, the members all hold the same
+// chaos runs a group under partitions, crashes and lost messages, of three
+// members or five as the seed has it,
+// checking it at every step. Once healed and quiet, the members all hold the same
 // count, which has every command acknowledged, and no more than were sent.
 func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 	t.Helper()
-	five := []string{"a", "b", "c", "d", "e"}
-	g := newGroup(t, seed, five, opts...)
+	// Three are the most fragile: one member losing a write may lose what
+	// was committed. Five see two members cut off at once.
+	members := []string{"a", "b", "c", "d", "e"}[:[]int{3, 5}[seed%2]]
+	g := newGroup(t, seed, members, opts...)
 	g.s.Loss = 0.05
-	cl, err := gensim.Spawn(g.s, genserver.Gen(client{group: g.name, members: five}), nil, gensim.On("client"))
+	cl, err := gensim.Spawn(g.s, genserver.Gen(client{group: g.name, members: members}), nil, gensim.On("client"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	r := rand.New(rand.NewPCG(seed, 5))
 	for range 20 {
-		cutOff(g.s, r, five)
+		g.recover()
+		g.disturb(r)
 		g.run(time.Duration(200+r.IntN(800)) * time.Millisecond)
 	}
 	// The client stops, its count kept, for the group to settle.
 	o, _ := gensim.State[outcomes](g.s, cl)
 	g.s.Exit(cl, proc.Kill)
-	g.s.Heal()
+	g.recover()
 	g.s.Loss = 0
 	g.run(5 * time.Second)
 
-	_, d, _ := g.member(five[0])
-	for _, m := range five {
+	_, d, _ := g.member(members[0])
+	for _, m := range members {
 		if _, dm, _ := g.member(m); dm.state != d.state {
-			t.Fatalf("seed %d: %s holds %d, %s %d", seed, m, dm.state, five[0], d.state)
+			t.Fatalf("seed %d: %s holds %d, %s %d", seed, m, dm.state, members[0], d.state)
 		}
 	}
 	out := o.unknown
@@ -152,14 +156,16 @@ func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 	}
 }
 
-// cutOff heals the group, then may cut a member or two off the others.
-func cutOff(s *gensim.Sim, r *rand.Rand, members []string) {
-	s.Heal()
-	switch r.IntN(3) {
-	case 0: // all together
+// disturb may cut a member or two off the others, or crash one amid the
+// steps to come, its storage keeping some of the writes it did not know
+// were durable.
+func (g *group) disturb(r *rand.Rand) {
+	members := g.members
+	switch r.IntN(4) {
+	case 0: // all well
 	case 1:
 		i := r.IntN(len(members))
-		s.Partition(members[i:i+1], without(members, i))
+		g.s.Partition(members[i:i+1], without(members, i))
 	case 2:
 		perm := r.Perm(len(members))
 		minority := []string{members[perm[0]], members[perm[1]]}
@@ -167,7 +173,20 @@ func cutOff(s *gensim.Sim, r *rand.Rand, members []string) {
 		for _, i := range perm[2:] {
 			majority = append(majority, members[i])
 		}
-		s.Partition(minority, majority)
+		g.s.Partition(minority, majority)
+	case 3:
+		g.due = &crashLater{member: members[r.IntN(len(members))], steps: r.IntN(300), keep: r.IntN(3)}
+	}
+}
+
+// recover heals the partitions, and restarts the members crashed.
+func (g *group) recover() {
+	g.due = nil
+	g.s.Heal()
+	for _, m := range g.members {
+		if _, _, ok := g.member(m); !ok {
+			g.restart(m)
+		}
 	}
 }
 

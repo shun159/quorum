@@ -24,6 +24,10 @@ type Spec[S, Cmd, Rep any] struct {
 	// Heartbeat is how often a leader tells the others it lives, well
 	// under ElectionTimeout. Zero means a sixth of ElectionTimeout.
 	Heartbeat time.Duration
+	// Storage keeps the term, the vote and the log of the member across
+	// restarts, each member its own. Without one, the member keeps them in
+	// memory only: restarted, it must not rejoin its group.
+	Storage Storage
 }
 
 // DefaultElectionTimeout is Spec.ElectionTimeout when zero.

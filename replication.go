@@ -15,12 +15,13 @@ const maxEntries = 64
 // others, and starts beating.
 func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
 	d.leader, d.votes = d.self, nil
-	d.log = append(d.log, entry{Term: d.term})
+	d.log = append(d.log, Entry{Term: d.term})
 	d.peers, d.round = nil, 0
 	for _, m := range b.others(*d) {
 		d.peers = append(d.peers, peer{name: m, next: d.log.lastIndex()})
 	}
-	effs := []actor.Effect{genstatem.StartStateTimeout{After: b.spec.Heartbeat}, b.quorumTimer()}
+	effs := b.saveLog(d, d.log.lastIndex())
+	effs = append(effs, genstatem.StartStateTimeout{After: b.spec.Heartbeat}, b.quorumTimer())
 	if l, ok := b.spec.Machine.(Leader[S]); ok {
 		effs = append(effs, l.Elected(d.state, d.term)...)
 	}
@@ -71,25 +72,30 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d replica[S], p peer) actor.Effect {
 }
 
 // appendEntries takes the entries of the leader, if the log matches the
-// leader's up to them, and replies how far it now matches.
+// leader's up to them, and replies how far it now matches, once they are
+// saved.
 func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntries) (role, replica[S], []actor.Effect) {
 	if m.Term < d.term {
 		// From a leader deposed, which learns of the later term.
-		return r, d, actor.Do(b.send(m.Leader, appendReply{Term: d.term, From: d.self}))
+		return r, d, d.after(b.send(m.Leader, appendReply{Term: d.term, From: d.self}))
 	}
 	// From the leader of the term: a candidate in it has lost.
 	r, d.leader = follower, m.Leader
 	effs := []actor.Effect{d.electionTimer(b.spec.ElectionTimeout)}
 	if !d.log.has(m.PrevIndex, m.PrevTerm) {
 		reply := appendReply{Term: d.term, From: d.self, LastIndex: d.log.lastIndex()}
-		return r, d, append(effs, b.send(m.Leader, reply))
+		return r, d, append(effs, d.after(b.send(m.Leader, reply))...)
 	}
-	d.log = d.log.merge(m.PrevIndex, m.Entries)
+	log, changed := d.log.merge(m.PrevIndex, m.Entries)
+	d.log = log
+	if changed > 0 {
+		effs = append(effs, b.saveLog(&d, changed)...)
+	}
 	match := m.PrevIndex + uint64(len(m.Entries))
 	d.commit = max(d.commit, min(m.Commit, match))
 	effs = append(effs, b.apply(r, &d)...)
 	reply := appendReply{Term: d.term, From: d.self, Success: true, Match: match}
-	return r, d, append(effs, b.send(m.Leader, reply))
+	return r, d, append(effs, d.after(b.send(m.Leader, reply))...)
 }
 
 // appendReply learns how far the log of a member matches the leader's, and
@@ -142,9 +148,12 @@ func (b behaviour[S, Cmd, Rep]) commit(r role, d *replica[S]) []actor.Effect {
 }
 
 // holders counts the members known to hold the entry at index n: the
-// leader, and the others matching it that far.
+// leader, once it is durable there, and the others matching it that far.
 func (d *replica[S]) holders(n uint64) int {
-	count := 1
+	count := 0
+	if d.stable >= n {
+		count++
+	}
 	for _, p := range d.peers {
 		if p.match >= n {
 			count++

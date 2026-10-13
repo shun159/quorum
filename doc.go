@@ -20,9 +20,15 @@
 // hears of them again. Two members may still lead at once for that short
 // while; what a leader does outside the group should carry its term.
 //
+// A member keeps its term, its vote and its log in a [Storage], and,
+// restarted, rejoins its group with them. It grants a vote, and
+// acknowledges entries, once they are durable there.
+//
 // # What there is not yet
 //
-// The log is in memory: a member restarted must not rejoin its group,
-// having forgotten its votes and its log. The members are fixed, there
-// are no snapshots, and a read is a command, committed as any other.
+// A member whose storage is lost, on a new disk, must not rejoin its
+// group as it was: it would vote again in a term, and forget entries the
+// others count on it for. Nothing stops it yet, and members cannot be
+// removed and added again. There are no snapshots, and a read is a
+// command, committed as any other.
 package quorum

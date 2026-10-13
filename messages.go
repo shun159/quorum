@@ -30,7 +30,7 @@ type (
 		Leader    string
 		PrevIndex uint64
 		PrevTerm  uint64
-		Entries   []entry
+		Entries   []Entry
 		Commit    uint64
 	}
 	// appendReply tells the leader how far the log of From matches its

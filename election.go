@@ -22,30 +22,34 @@ func (b behaviour[S, Cmd, Rep]) stand(d replica[S]) (role, replica[S], []actor.E
 	d.term++
 	d.votedFor, d.leader = d.self, ""
 	d.votes = []string{d.self}
+	effs := b.saveState(&d)
 	if b.won(d) {
-		return leader, d, nil // a group of one
+		return leader, d, effs // a group of one
 	}
+	effs = append(effs, d.electionTimer(b.spec.ElectionTimeout))
 	ask := requestVote{Term: d.term, Candidate: d.self, LastIndex: d.log.lastIndex(), LastTerm: d.log.lastTerm()}
-	effs := []actor.Effect{d.electionTimer(b.spec.ElectionTimeout)}
+	var asks []actor.Effect
 	for _, m := range b.others(d) {
-		effs = append(effs, b.send(m, ask))
+		asks = append(asks, b.send(m, ask))
 	}
-	return candidate, d, effs
+	return candidate, d, append(effs, d.after(asks...)...)
 }
 
 // requestVote answers a candidate. A member votes once in a term, for a
 // candidate whose log its own is not ahead of, and then waits for that
-// candidate to win before standing itself.
+// candidate to win before standing itself. It answers once its vote is
+// saved: restarted, it must not vote again in the term.
 func (b behaviour[S, Cmd, Rep]) requestVote(r role, d replica[S], m requestVote) (role, replica[S], []actor.Effect) {
 	grant := m.Term == d.term &&
 		(d.votedFor == "" || d.votedFor == m.Candidate) &&
 		d.log.notAheadOf(m.LastIndex, m.LastTerm)
-	effs := []actor.Effect{b.send(m.Candidate, voteReply{Term: d.term, From: d.self, Granted: grant})}
+	var effs []actor.Effect
 	if grant {
 		d.votedFor = m.Candidate
-		effs = append(effs, d.electionTimer(b.spec.ElectionTimeout))
+		effs = append(b.saveState(&d), d.electionTimer(b.spec.ElectionTimeout))
 	}
-	return r, d, effs
+	reply := b.send(m.Candidate, voteReply{Term: d.term, From: d.self, Granted: grant})
+	return r, d, append(effs, d.after(reply)...)
 }
 
 // voteReply counts a vote for the candidate: a majority makes it the

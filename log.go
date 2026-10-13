@@ -2,10 +2,10 @@ package quorum
 
 import "slices"
 
-// entry is a command in the log, with the term of the leader that
+// Entry is a command in the log, with the term of the leader that
 // appended it. A nil Cmd is the entry a leader appends on being elected,
 // which applies nothing.
-type entry struct {
+type Entry struct {
 	Term uint64
 	Cmd  any
 }
@@ -13,7 +13,7 @@ type entry struct {
 // raftLog is the entries of a member, the first at index 1. It is a value:
 // appending past its end leaves the entries of an older copy as they are,
 // and a change within it makes a new slice.
-type raftLog []entry
+type raftLog []Entry
 
 func (l raftLog) lastIndex() uint64 { return uint64(len(l)) }
 
@@ -28,7 +28,7 @@ func (l raftLog) termAt(i uint64) uint64 {
 }
 
 // at returns the entry at index i, which must be in the log.
-func (l raftLog) at(i uint64) entry { return l[i-1] }
+func (l raftLog) at(i uint64) Entry { return l[i-1] }
 
 // has reports whether the log holds the entry of term at index, as the
 // leader's does: the log matches the leader's up to there. Every log has
@@ -39,7 +39,7 @@ func (l raftLog) has(index, term uint64) bool {
 
 // from returns a copy of the entries from index i on, at most max, for a
 // message: what is sent must not change after.
-func (l raftLog) from(i uint64, max int) []entry {
+func (l raftLog) from(i uint64, max int) []Entry {
 	if i > l.lastIndex() {
 		return nil
 	}
@@ -47,19 +47,20 @@ func (l raftLog) from(i uint64, max int) []entry {
 }
 
 // merge returns the log with the leader's entries after index prev, which
-// the log has. An entry it holds already is kept; from the first that
-// differs in term, the log takes the leader's instead of its own.
-func (l raftLog) merge(prev uint64, entries []entry) raftLog {
+// the log has, and the index from which it changed, 0 if it did not. An
+// entry it holds already is kept; from the first that differs in term, the
+// log takes the leader's instead of its own.
+func (l raftLog) merge(prev uint64, entries []Entry) (raftLog, uint64) {
 	for k, e := range entries {
 		i := prev + 1 + uint64(k)
 		if i > l.lastIndex() {
-			return append(l, entries[k:]...)
+			return append(l, entries[k:]...), i
 		}
 		if l.termAt(i) != e.Term {
-			return append(slices.Clip(l[:i-1]), entries[k:]...)
+			return append(slices.Clip(l[:i-1]), entries[k:]...), i
 		}
 	}
-	return l
+	return l, 0
 }
 
 // notAheadOf reports whether the log is no more up to date than one

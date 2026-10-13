@@ -42,6 +42,11 @@ type replica[S any] struct {
 	peers   []peer    // the others, as the leader
 	pending []pending // commands to reply to, as the leader, by index
 	round   uint64    // of the checks of the quorum, as the leader
+
+	seq    uint64 // of the last write to the storage
+	saved  uint64 // seq of the last write known durable
+	stable uint64 // the last index of the log known durable
+	held   []held // what waits on writes to be told, by seq
 }
 
 // peer is what the leader knows of the log of another member.
@@ -74,11 +79,19 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 	if !slices.Contains(b.spec.Members, node) {
 		return follower, replica[S]{}, nil, fmt.Errorf("quorum: node %s is not a member of group %s", node, b.spec.Group)
 	}
-	d := replica[S]{
-		self:  node,
-		rng:   *rand.NewPCG(seed(b.spec.Group, node), 0),
-		state: b.spec.Machine.Init(),
+	saved, err := b.load()
+	if err != nil {
+		return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s cannot load what it saved: %w", b.spec.Group, err)
 	}
+	d := replica[S]{
+		self:     node,
+		rng:      *rand.NewPCG(seed(b.spec.Group, node), 0),
+		state:    b.spec.Machine.Init(),
+		term:     saved.State.Term,
+		votedFor: saved.State.VotedFor,
+		log:      raftLog(saved.Log),
+	}
+	d.stable = d.log.lastIndex()
 	return follower, d, nil, nil
 }
 
@@ -103,6 +116,9 @@ func (b behaviour[S, Cmd, Rep]) HandleEvent(r role, d replica[S], ev genstatem.E
 	case genstatem.Call:
 		return b.call(r, d, e)
 	case genstatem.Info:
+		if tag, err, ok := b.isDurable(e.Msg); ok {
+			return b.durable(r, d, tag, err)
+		}
 		return b.message(r, d, e.Msg)
 	}
 	return r, d, nil
@@ -133,12 +149,20 @@ func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S],
 }
 
 // message handles a message from another member. One of a later term
-// makes the member a follower in that term first, whatever it was.
+// makes the member a follower in that term first, whatever it was, which
+// it saves.
 func (b behaviour[S, Cmd, Rep]) message(r role, d replica[S], msg any) (role, replica[S], []actor.Effect) {
+	var saving []actor.Effect
 	if m, ok := msg.(termed); ok && m.term() > d.term {
 		r = follower
 		d.newTerm(m.term())
+		saving = b.saveState(&d)
 	}
+	r, d, effs := b.handle(r, d, msg)
+	return r, d, append(saving, effs...)
+}
+
+func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, replica[S], []actor.Effect) {
 	switch m := msg.(type) {
 	case requestVote:
 		return b.requestVote(r, d, m)
