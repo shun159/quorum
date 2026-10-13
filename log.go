@@ -3,11 +3,13 @@ package quorum
 import "slices"
 
 // Entry is a command in the log, with the term of the leader that
-// appended it. A nil Cmd is the entry a leader appends on being elected,
-// which applies nothing.
+// appended it, or a configuration of the group. The entry a leader appends
+// on being elected has neither, and the first of the log, founding the
+// group, has the term 0.
 type Entry struct {
-	Term uint64
-	Cmd  any
+	Term   uint64
+	Cmd    any
+	Config *Config
 }
 
 // raftLog is the entries of a member, the first at index 1. It is a value:

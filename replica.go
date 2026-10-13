@@ -26,22 +26,23 @@ func (r role) String() string {
 
 // replica is the data of a member of a group.
 type replica[S any] struct {
-	self string   // the node of the member
-	rng  rand.PCG // draws its election timeouts
+	id  proc.PID // who the member is, see Config
+	rng rand.PCG // draws its election timeouts
 
-	term     uint64 // the latest term it knows
-	votedFor string // in term, if it voted
-	leader   string // of term, once known
+	term     uint64   // the latest term it knows
+	votedFor proc.PID // in term, if it voted
+	leader   proc.PID // of term, once known
 
 	log     raftLog
+	config  Config // the latest in the log
 	commit  uint64 // the last index known committed
 	applied uint64 // the last index applied to state
 	state   S      // of the machine
 
-	votes   []string  // granted to it, as a candidate
-	peers   []peer    // the others, as the leader
-	pending []pending // commands to reply to, as the leader, by index
-	round   uint64    // of the checks of the quorum, as the leader
+	votes   []proc.PID // granted to it, as a candidate
+	peers   []peer     // the other members, as the leader
+	pending []pending  // commands to reply to, as the leader, by index
+	round   uint64     // of the checks of the quorum, as the leader
 
 	seq    uint64 // of the last write to the storage
 	saved  uint64 // seq of the last write known durable
@@ -51,7 +52,7 @@ type replica[S any] struct {
 
 // peer is what the leader knows of the log of another member.
 type peer struct {
-	name  string
+	id    proc.PID
 	next  uint64 // the index of the next entry to send it
 	match uint64 // the last index known to match the leader's
 
@@ -71,35 +72,38 @@ type behaviour[S, Cmd, Rep any] struct {
 
 func (behaviour[S, Cmd, Rep]) StateEnter() bool { return true }
 
+// Init loads what the member saved. On a blank storage, the member is a
+// new one, known by its PID, which it saves first.
 func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.Effect, error) {
 	if err := b.spec.validate(); err != nil {
 		return follower, replica[S]{}, nil, err
-	}
-	node := self.Node()
-	if !slices.Contains(b.spec.Members, node) {
-		return follower, replica[S]{}, nil, fmt.Errorf("quorum: node %s is not a member of group %s", node, b.spec.Group)
 	}
 	saved, err := b.load()
 	if err != nil {
 		return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s cannot load what it saved: %w", b.spec.Group, err)
 	}
 	d := replica[S]{
-		self:     node,
-		rng:      *rand.NewPCG(seed(b.spec.Group, node), 0),
+		id:       saved.State.Self,
+		rng:      *rand.NewPCG(seed(b.spec.Group, self.String()), 0),
 		state:    b.spec.Machine.Init(),
 		term:     saved.State.Term,
 		votedFor: saved.State.VotedFor,
 		log:      raftLog(saved.Log),
 	}
+	d.config = d.log.config()
 	d.stable = d.log.lastIndex()
-	return follower, d, nil, nil
+	if !d.id.IsZero() {
+		return follower, d, nil, nil
+	}
+	d.id = self
+	return follower, d, b.saveState(&d), nil
 }
 
-// seed seeds the election timeouts of the member of group on node: the
-// same in every run, different between the members.
-func seed(group, node string) uint64 {
+// seed seeds the election timeouts of the member of group in process
+// self: the same in every run, different between the members.
+func seed(group, self string) uint64 {
 	h := fnv.New64a()
-	h.Write([]byte(group + "/" + node))
+	h.Write([]byte(group + "/" + self))
 	return h.Sum64()
 }
 
@@ -139,11 +143,14 @@ func (b behaviour[S, Cmd, Rep]) enter(r, old role, d replica[S]) (role, replica[
 	return r, d, effs
 }
 
-// timeout is the state timeout: a follower or a candidate that heard from
-// no leader stands for election; the leader beats.
+// timeout is the state timeout: a voter that heard from no leader stands
+// for election; the leader beats. A member not voting waits on.
 func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S], []actor.Effect) {
-	if r == leader {
+	switch {
+	case r == leader:
 		return r, d, b.heartbeat(d)
+	case !d.config.isVoter(d.id):
+		return r, d, actor.Do(d.electionTimer(b.spec.ElectionTimeout))
 	}
 	return b.stand(d)
 }
@@ -152,6 +159,9 @@ func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S],
 // makes the member a follower in that term first, whatever it was, which
 // it saves.
 func (b behaviour[S, Cmd, Rep]) message(r role, d replica[S], msg any) (role, replica[S], []actor.Effect) {
+	if m, ok := msg.(appendEntries); ok && m.To != d.id {
+		return r, d, nil // for an earlier member on this node
+	}
 	var saving []actor.Effect
 	if m, ok := msg.(termed); ok && m.term() > d.term {
 		r = follower
@@ -179,21 +189,15 @@ func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, rep
 // newTerm moves the member to a later term, in which it has not voted,
 // and knows no leader yet.
 func (d *replica[S]) newTerm(term uint64) {
-	d.term, d.votedFor, d.leader = term, "", ""
+	d.term, d.votedFor, d.leader = term, proc.PID{}, proc.PID{}
 }
 
 // others returns the members other than this one.
-func (b behaviour[S, Cmd, Rep]) others(d replica[S]) []string {
-	var others []string
-	for _, m := range b.spec.Members {
-		if m != d.self {
-			others = append(others, m)
-		}
-	}
-	return others
+func (d *replica[S]) others() []proc.PID {
+	return slices.DeleteFunc(d.config.members(), func(id proc.PID) bool { return id == d.id })
 }
 
-// send sends msg to the member of the group on node.
-func (b behaviour[S, Cmd, Rep]) send(node string, msg any) actor.Effect {
-	return actor.Send{To: actor.Remote{Node: node, Name: replicaName(b.spec.Group)}, Msg: msg}
+// send sends msg to the member id.
+func (b behaviour[S, Cmd, Rep]) send(id proc.PID, msg any) actor.Effect {
+	return actor.Send{To: actor.Remote{Node: id.Node(), Name: replicaName(b.spec.Group)}, Msg: msg}
 }

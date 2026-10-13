@@ -52,6 +52,15 @@ func newGroup(t *testing.T, seed uint64, members []string, opts ...gensim.Option
 // given its node.
 func newGroupOf(t *testing.T, seed uint64, members []string, machine func(node string) Machine[int, int, int], opts ...gensim.Option) *group {
 	t.Helper()
+	g := unfounded(t, seed, members, machine, opts...)
+	g.found()
+	return g
+}
+
+// unfounded starts the members of a group, on blank storages, without
+// founding it.
+func unfounded(t *testing.T, seed uint64, members []string, machine func(node string) Machine[int, int, int], opts ...gensim.Option) *group {
+	t.Helper()
 	g := &group{
 		t: t, s: gensim.New(seed, opts...), name: "g", members: members,
 		pids: map[string]proc.PID{}, specs: map[string]Spec[int, int, int]{},
@@ -59,10 +68,34 @@ func newGroupOf(t *testing.T, seed uint64, members []string, machine func(node s
 	}
 	for _, m := range members {
 		g.storage[m] = &memStorage{}
-		g.specs[m] = Spec[int, int, int]{Group: g.name, Members: members, Machine: machine(m), Storage: g.storage[m]}
+		g.specs[m] = Spec[int, int, int]{Group: g.name, Machine: machine(m), Storage: g.storage[m]}
 		g.start(m)
 	}
 	return g
+}
+
+// found founds the group with its members, as Found does, from outside
+// the simulation.
+func (g *group) found() {
+	g.t.Helper()
+	var config Config
+	for _, m := range g.members {
+		v, err := g.s.Call(g.at(m), identify{})
+		if err != nil {
+			g.t.Fatal(err)
+		}
+		config.Voters = append(config.Voters, v.(identity).ID)
+	}
+	for _, m := range g.members {
+		if v, err := g.s.Call(g.at(m), found{config}); err != nil || v != (applied{}) {
+			g.t.Fatalf("founding on %s: %v, %v", m, v, err)
+		}
+	}
+}
+
+// at is where the member on node m is.
+func (g *group) at(m string) actor.Remote {
+	return actor.Remote{Node: m, Name: replicaName(g.name)}
 }
 
 // start starts the member on node m.
@@ -91,6 +124,16 @@ func (g *group) crashIfDue() {
 		g.crash(g.due.member, g.due.keep)
 		g.due = nil
 	}
+}
+
+// loseDisk crashes the node m, its storage lost: restarted, it starts on
+// a blank one, as on a new disk.
+func (g *group) loseDisk(m string) {
+	g.s.Crash(m)
+	g.storage[m] = &memStorage{}
+	spec := g.specs[m]
+	spec.Storage = g.storage[m]
+	g.specs[m] = spec
 }
 
 // restart restarts the node m, crashed, and its member, with what it saved.
@@ -189,7 +232,7 @@ func (g *group) checkLeader(m string, r role, d replica[int]) error {
 func (g *group) checkCommitted(m string, d replica[int]) error {
 	mine := d.log[:d.commit]
 	for i := range min(len(mine), len(g.committed)) {
-		if mine[i] != g.committed[i] {
+		if !sameEntry(mine[i], g.committed[i]) {
 			return fmt.Errorf("%s committed %+v at index %d, where %+v was", m, mine[i], i+1, g.committed[i])
 		}
 	}
@@ -197,6 +240,16 @@ func (g *group) checkCommitted(m string, d replica[int]) error {
 		g.committed = slices.Clone(mine)
 	}
 	return nil
+}
+
+// sameEntry reports whether a and b are the same entry, their
+// configurations compared by what they hold, as each member has its own.
+func sameEntry(a, b Entry) bool {
+	if a.Term != b.Term || a.Cmd != b.Cmd || (a.Config == nil) != (b.Config == nil) {
+		return false
+	}
+	return a.Config == nil ||
+		slices.Equal(a.Config.Voters, b.Config.Voters) && slices.Equal(a.Config.Learners, b.Config.Learners)
 }
 
 // checkApplied checks that the state of a member is what it applied.
@@ -224,8 +277,8 @@ func TestElection(t *testing.T) {
 	}
 	_, ld, _ := g.member(l)
 	for _, m := range three {
-		if _, d, _ := g.member(m); d.term != ld.term || d.leader != l {
-			t.Errorf("%s: term %d, leader %q; want %d, %q", m, d.term, d.leader, ld.term, l)
+		if _, d, _ := g.member(m); d.term != ld.term || d.leader.Node() != l {
+			t.Errorf("%s: term %d, leader %v; want %d, %s", m, d.term, d.leader, ld.term, l)
 		}
 	}
 }

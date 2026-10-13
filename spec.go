@@ -3,18 +3,16 @@ package quorum
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 )
 
-// Spec says what a group is: its name, its members, and the machine it
-// replicates.
+// Spec says what the member of a group on a node is: the group, the
+// machine it replicates, and where it keeps what it must not forget. Who
+// the members are is in the log of the group, see Found.
 type Spec[S, Cmd, Rep any] struct {
 	// Group names the group. Its member on each node is registered under
 	// "quorum/" followed by it.
-	Group string
-	// Members are the names of the nodes of the group, one member on each.
-	Members []string
+	Group   string
 	Machine Machine[S, Cmd, Rep]
 	// ElectionTimeout is how long a follower waits to hear from a leader
 	// before it stands for election, plus up to as much again, which
@@ -24,9 +22,10 @@ type Spec[S, Cmd, Rep any] struct {
 	// Heartbeat is how often a leader tells the others it lives, well
 	// under ElectionTimeout. Zero means a sixth of ElectionTimeout.
 	Heartbeat time.Duration
-	// Storage keeps the term, the vote and the log of the member across
-	// restarts, each member its own. Without one, the member keeps them in
-	// memory only: restarted, it must not rejoin its group.
+	// Storage keeps who the member is, its term, its vote and its log
+	// across restarts, each member its own. Without one, the member keeps
+	// them in memory only: restarted, it is another member, which the
+	// group must add.
 	Storage Storage
 }
 
@@ -35,9 +34,6 @@ const DefaultElectionTimeout = 300 * time.Millisecond
 
 // replicaName is the name of the member of group on each node.
 func replicaName(group string) string { return "quorum/" + group }
-
-// majority is how many members make a majority of the group.
-func (spec Spec[S, Cmd, Rep]) majority() int { return len(spec.Members)/2 + 1 }
 
 // withDefaults returns spec with its zero durations set.
 func (spec Spec[S, Cmd, Rep]) withDefaults() Spec[S, Cmd, Rep] {
@@ -55,10 +51,6 @@ func (spec Spec[S, Cmd, Rep]) validate() error {
 	switch {
 	case spec.Group == "":
 		return errors.New("quorum: a group needs a name")
-	case len(spec.Members) == 0:
-		return fmt.Errorf("quorum: group %s has no members", spec.Group)
-	case hasDuplicate(spec.Members):
-		return fmt.Errorf("quorum: group %s has a member twice: %v", spec.Group, spec.Members)
 	case spec.Machine == nil:
 		return fmt.Errorf("quorum: group %s has no machine", spec.Group)
 	case spec.Heartbeat >= spec.ElectionTimeout:
@@ -66,9 +58,4 @@ func (spec Spec[S, Cmd, Rep]) validate() error {
 			spec.Group, spec.Heartbeat, spec.ElectionTimeout)
 	}
 	return nil
-}
-
-func hasDuplicate(names []string) bool {
-	sorted := slices.Sorted(slices.Values(names))
-	return len(slices.Compact(sorted)) != len(names)
 }

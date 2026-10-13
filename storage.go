@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/shun159/molecule/actor"
+	"github.com/shun159/molecule/proc"
 )
 
 // Storage keeps what a member must not forget across restarts: its term,
@@ -28,10 +29,12 @@ type Storage interface {
 	Durable(msg any) (tag any, err error, ok bool)
 }
 
-// State is what a member saves besides its log.
+// State is what a member saves besides its log: who it is, the latest
+// term it knows, and whom it voted for in it, if anyone.
 type State struct {
+	Self     proc.PID
 	Term     uint64
-	VotedFor string
+	VotedFor proc.PID
 }
 
 // Saved is what a member saved.
@@ -63,7 +66,7 @@ func (b behaviour[S, Cmd, Rep]) load() (Saved, error) {
 
 // saveState saves the term and the vote of the member.
 func (b behaviour[S, Cmd, Rep]) saveState(d *replica[S]) []actor.Effect {
-	st := State{Term: d.term, VotedFor: d.votedFor}
+	st := State{Self: d.id, Term: d.term, VotedFor: d.votedFor}
 	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.SaveState(st, tag) })
 }
 

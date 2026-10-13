@@ -5,6 +5,7 @@ import (
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/genstatem"
+	"github.com/shun159/molecule/proc"
 )
 
 // maxEntries is the most entries a message carries.
@@ -14,11 +15,11 @@ const maxEntries = 64
 // its own, which commits the entries of earlier terms with it, tells the
 // others, and starts beating.
 func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
-	d.leader, d.votes = d.self, nil
+	d.leader, d.votes = d.id, nil
 	d.log = append(d.log, Entry{Term: d.term})
 	d.peers, d.round = nil, 0
-	for _, m := range b.others(*d) {
-		d.peers = append(d.peers, peer{name: m, next: d.log.lastIndex()})
+	for _, id := range d.others() {
+		d.peers = append(d.peers, peer{id: id, next: d.log.lastIndex()})
 	}
 	effs := b.saveLog(d, d.log.lastIndex())
 	effs = append(effs, genstatem.StartStateTimeout{After: b.spec.Heartbeat}, b.quorumTimer())
@@ -61,9 +62,10 @@ func (b behaviour[S, Cmd, Rep]) replicate(d replica[S]) []actor.Effect {
 // appendTo sends p the entries from its next one on, after the one before.
 func (b behaviour[S, Cmd, Rep]) appendTo(d replica[S], p peer) actor.Effect {
 	prev := p.next - 1
-	return b.send(p.name, appendEntries{
+	return b.send(p.id, appendEntries{
 		Term:      d.term,
-		Leader:    d.self,
+		Leader:    d.id,
+		To:        p.id,
 		PrevIndex: prev,
 		PrevTerm:  d.log.termAt(prev),
 		Entries:   d.log.from(p.next, maxEntries),
@@ -77,24 +79,24 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d replica[S], p peer) actor.Effect {
 func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntries) (role, replica[S], []actor.Effect) {
 	if m.Term < d.term {
 		// From a leader deposed, which learns of the later term.
-		return r, d, d.after(b.send(m.Leader, appendReply{Term: d.term, From: d.self}))
+		return r, d, d.after(b.send(m.Leader, appendReply{Term: d.term, From: d.id}))
 	}
 	// From the leader of the term: a candidate in it has lost.
 	r, d.leader = follower, m.Leader
 	effs := []actor.Effect{d.electionTimer(b.spec.ElectionTimeout)}
 	if !d.log.has(m.PrevIndex, m.PrevTerm) {
-		reply := appendReply{Term: d.term, From: d.self, LastIndex: d.log.lastIndex()}
+		reply := appendReply{Term: d.term, From: d.id, LastIndex: d.log.lastIndex()}
 		return r, d, append(effs, d.after(b.send(m.Leader, reply))...)
 	}
 	log, changed := d.log.merge(m.PrevIndex, m.Entries)
-	d.log = log
 	if changed > 0 {
+		d.log, d.config = log, log.config()
 		effs = append(effs, b.saveLog(&d, changed)...)
 	}
 	match := m.PrevIndex + uint64(len(m.Entries))
 	d.commit = max(d.commit, min(m.Commit, match))
 	effs = append(effs, b.apply(r, &d)...)
-	reply := appendReply{Term: d.term, From: d.self, Success: true, Match: match}
+	reply := appendReply{Term: d.term, From: d.id, Success: true, Match: match}
 	return r, d, append(effs, d.after(b.send(m.Leader, reply))...)
 }
 
@@ -122,10 +124,10 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 	return r, d, effs
 }
 
-// peer returns the progress of the member name, in a copy of the peers the
+// peer returns the progress of the member id, in a copy of the peers the
 // data owns, to change; nil if it is not one of them.
-func (d *replica[S]) peer(name string) *peer {
-	i := slices.IndexFunc(d.peers, func(p peer) bool { return p.name == name })
+func (d *replica[S]) peer(id proc.PID) *peer {
+	i := slices.IndexFunc(d.peers, func(p peer) bool { return p.id == id })
 	if i < 0 {
 		return nil
 	}
@@ -133,13 +135,13 @@ func (d *replica[S]) peer(name string) *peer {
 	return &d.peers[i]
 }
 
-// commit commits the latest entry of the term that a majority holds, with
-// those before it, and applies them. An entry of an earlier term is never
-// committed by counting, only by one of the term after it: a majority may
-// hold it, yet a later leader may not.
+// commit commits the latest entry of the term that a majority of the
+// voters holds, with those before it, and applies them. An entry of an
+// earlier term is never committed by counting, only by one of the term
+// after it: a majority may hold it, yet a later leader may not.
 func (b behaviour[S, Cmd, Rep]) commit(r role, d *replica[S]) []actor.Effect {
 	for n := d.log.lastIndex(); n > d.commit && d.log.termAt(n) == d.term; n-- {
-		if d.holders(n) >= b.spec.majority() {
+		if d.holders(n) >= d.config.majority() {
 			d.commit = n
 			return b.apply(r, d)
 		}
@@ -147,15 +149,15 @@ func (b behaviour[S, Cmd, Rep]) commit(r role, d *replica[S]) []actor.Effect {
 	return nil
 }
 
-// holders counts the members known to hold the entry at index n: the
+// holders counts the voters known to hold the entry at index n: the
 // leader, once it is durable there, and the others matching it that far.
 func (d *replica[S]) holders(n uint64) int {
 	count := 0
-	if d.stable >= n {
+	if d.config.isVoter(d.id) && d.stable >= n {
 		count++
 	}
 	for _, p := range d.peers {
-		if p.match >= n {
+		if d.config.isVoter(p.id) && p.match >= n {
 			count++
 		}
 	}
@@ -171,7 +173,7 @@ func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 		d.applied++
 		e := d.log.at(d.applied)
 		if e.Cmd == nil {
-			continue // the entry of an election
+			continue // the entry of an election, or a configuration
 		}
 		state, rep, more := b.spec.Machine.Apply(d.state, e.Cmd.(Cmd))
 		d.state = state

@@ -8,16 +8,22 @@ import (
 	"github.com/shun159/molecule/proc"
 )
 
-// member returns the member on node b of a group of three, as it starts,
-// its storage in memory: a behaviour is pure, its events handled by hand.
+// The members a, b and c of a group, by their PIDs.
+var ida, idb, idc = proc.NewNode("a").NewPID(), proc.NewNode("b").NewPID(), proc.NewNode("c").NewPID()
+
+// member returns the member b of a group of three, founded, its storage
+// in memory: a behaviour is pure, its events handled by hand.
 func member(t *testing.T) (behaviour[int, int, int], replica[int]) {
 	t.Helper()
-	spec := Spec[int, int, int]{Group: "g", Members: three, Machine: counter{}, Storage: &memStorage{}}
+	spec := Spec[int, int, int]{Group: "g", Machine: counter{}, Storage: &memStorage{}}
 	b := behaviour[int, int, int]{spec.withDefaults()}
-	_, d, _, err := b.Init(proc.NewNode("b").NewPID())
+	_, d, _, err := b.Init(idb)
 	if err != nil {
 		t.Fatal(err)
 	}
+	config := Config{Voters: []proc.PID{ida, idb, idc}}
+	d.log, d.config = raftLog{{Config: &config}}, config
+	d.saved, d.stable = d.seq, 1 // founded, and saved
 	return b, d
 }
 
@@ -51,13 +57,13 @@ func written(t *testing.T, effs []actor.Effect) any {
 // again in the term, for another.
 func TestVoteWaitsForDurable(t *testing.T) {
 	b, d := member(t)
-	ask := requestVote{Term: 1, Candidate: "a"}
+	ask := requestVote{Term: 1, Candidate: ida, LastIndex: 1}
 	r, d, effs := b.HandleEvent(follower, d, genstatem.Info{Msg: ask})
 	if msgs := sent(effs); len(msgs) != 0 {
 		t.Fatalf("told %v before the vote was saved", msgs)
 	}
 	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
-	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (voteReply{Term: 1, From: "b", Granted: true}) {
+	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (voteReply{Term: 1, From: idb, Granted: true}) {
 		t.Errorf("once saved, told %v", msgs)
 	}
 }
@@ -66,13 +72,13 @@ func TestVoteWaitsForDurable(t *testing.T) {
 // holding them, to commit.
 func TestAckWaitsForDurable(t *testing.T) {
 	b, d := member(t)
-	add := appendEntries{Term: 1, Leader: "a", Entries: []Entry{{Term: 1, Cmd: 1}}}
+	add := appendEntries{Term: 1, Leader: ida, To: idb, PrevIndex: 1, Entries: []Entry{{Term: 1, Cmd: 1}}}
 	r, d, effs := b.HandleEvent(follower, d, genstatem.Info{Msg: add})
 	if msgs := sent(effs); len(msgs) != 0 {
 		t.Fatalf("told %v before the entries were saved", msgs)
 	}
 	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
-	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (appendReply{Term: 1, From: "b", Success: true, Match: 1}) {
+	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (appendReply{Term: 1, From: idb, Success: true, Match: 2}) {
 		t.Errorf("once saved, told %v", msgs)
 	}
 }
@@ -100,12 +106,12 @@ func TestLeaderCountsItselfOnceDurable(t *testing.T) {
 	}
 	tag := written(t, effs)
 	// One other member holds the entry: with the leader, a majority.
-	r, d, _ = b.HandleEvent(r, d, genstatem.Info{Msg: appendReply{Term: 1, From: "a", Success: true, Match: 1}})
+	r, d, _ = b.HandleEvent(r, d, genstatem.Info{Msg: appendReply{Term: 1, From: ida, Success: true, Match: 2}})
 	if d.commit != 0 {
 		t.Fatalf("committed %d before its entry was saved", d.commit)
 	}
 	_, d, _ = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{tag}})
-	if d.commit != 1 {
-		t.Errorf("commit %d once saved, want 1", d.commit)
+	if d.commit != 2 {
+		t.Errorf("commit %d once saved, want 2", d.commit)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/genserver"
 	"github.com/shun159/molecule/gensim"
+	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
 )
 
@@ -45,6 +46,9 @@ func write(t *testing.T, st quorum.Storage, effs ...actor.Effect) {
 	}
 }
 
+// voted is the member voted for, a PID.
+var voted = proc.NewNode("a").NewPID()
+
 func entries(terms ...uint64) []quorum.Entry {
 	var es []quorum.Entry
 	for i, term := range terms {
@@ -62,7 +66,7 @@ func TestStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	g, gx := For(table, "g"), For(table, "gx")
-	write(t, g, g.SaveState(quorum.State{Term: 3, VotedFor: "a"}, 1), g.Append(1, entries(1, 1, 2, 2), 2))
+	write(t, g, g.SaveState(quorum.State{Term: 3, VotedFor: voted}, 1), g.Append(1, entries(1, 1, 2, 2), 2))
 	write(t, gx, gx.Append(1, entries(7), 3))
 	// A leader of term 3 replaces the entries from index 3 on.
 	write(t, g, g.Append(3, []quorum.Entry{{Term: 3, Cmd: "new"}}, 4))
@@ -80,7 +84,7 @@ func TestStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := quorum.Saved{
-		State: quorum.State{Term: 3, VotedFor: "a"},
+		State: quorum.State{Term: 3, VotedFor: voted},
 		Log:   append(entries(1, 1), quorum.Entry{Term: 3, Cmd: "new"}),
 	}
 	if saved.State != want.State || !slices.Equal(saved.Log, want.Log) {

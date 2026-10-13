@@ -1,33 +1,40 @@
 package quorum
 
-import "github.com/shun159/molecule/dist"
+import (
+	"github.com/shun159/molecule/dist"
+	"github.com/shun159/molecule/proc"
+)
 
 func init() {
 	dist.Register(requestVote{}, voteReply{}, appendEntries{}, appendReply{},
-		command{}, applied{}, redirect{}, deposed{}, rejected{})
+		command{}, applied{}, redirect{}, deposed{}, rejected{},
+		identify{}, identity{}, found{}, Config{})
 }
 
 // The messages between the members of a group, the RPCs of Raft, sent as
-// messages: a reply is a message too.
+// messages: a reply is a message too. Members are named by who they are,
+// as Config has it, and found on the node of that PID.
 type (
 	// requestVote asks for the vote of a member, for Candidate to lead Term.
 	requestVote struct {
 		Term      uint64
-		Candidate string
+		Candidate proc.PID
 		LastIndex uint64 // of the candidate's log
 		LastTerm  uint64
 	}
 	voteReply struct {
 		Term    uint64
-		From    string
+		From    proc.PID
 		Granted bool
 	}
-	// appendEntries has a follower append Entries after the entry of
+	// appendEntries has the member To append Entries after the entry of
 	// PrevTerm at PrevIndex, if it has that one, and tells it what is
-	// committed. Without entries, it is a heartbeat.
+	// committed. Without entries, it is a heartbeat. A member other than
+	// To on its node, a later one, drops it.
 	appendEntries struct {
 		Term      uint64
-		Leader    string
+		Leader    proc.PID
+		To        proc.PID
 		PrevIndex uint64
 		PrevTerm  uint64
 		Entries   []Entry
@@ -37,7 +44,7 @@ type (
 	// own, Match, or, failing, how long it is, for the leader to go back.
 	appendReply struct {
 		Term      uint64
-		From      string
+		From      proc.PID
 		Success   bool
 		Match     uint64
 		LastIndex uint64
@@ -57,7 +64,17 @@ func (m appendReply) term() uint64   { return m.Term }
 type (
 	command  struct{ Cmd any }
 	applied  struct{ Rep any }       // applied, with its reply
-	redirect struct{ Leader string } // not appended; Leader if known
+	redirect struct{ Leader string } // not appended; the node of the leader, if known
 	deposed  struct{}                // appended, but the leader lost its place: applied or not
-	rejected struct{ Reason string } // not a command of the group
+	rejected struct{ Reason string } // not taken
+)
+
+// Founding a group: who a member is, and the first configuration.
+type (
+	identify struct{}
+	identity struct {
+		ID    proc.PID
+		Blank bool // its log is empty: no group has it yet
+	}
+	found struct{ Config Config }
 )

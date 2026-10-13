@@ -21,7 +21,7 @@ func TestSpecDefaults(t *testing.T) {
 }
 
 func TestSpecValidate(t *testing.T) {
-	valid := Spec[int, struct{}, int]{Group: "g", Members: []string{"a", "b", "c"}, Machine: nop{}}
+	valid := Spec[int, struct{}, int]{Group: "g", Machine: nop{}}
 	if err := valid.withDefaults().validate(); err != nil {
 		t.Fatalf("valid spec: %v", err)
 	}
@@ -30,8 +30,6 @@ func TestSpecValidate(t *testing.T) {
 		want   string
 	}{
 		{func(s *Spec[int, struct{}, int]) { s.Group = "" }, "needs a name"},
-		{func(s *Spec[int, struct{}, int]) { s.Members = nil }, "no members"},
-		{func(s *Spec[int, struct{}, int]) { s.Members = []string{"a", "b", "a"} }, "member twice"},
 		{func(s *Spec[int, struct{}, int]) { s.Machine = nil }, "no machine"},
 		{func(s *Spec[int, struct{}, int]) { s.Heartbeat = time.Second }, "not under its election timeout"},
 	} {

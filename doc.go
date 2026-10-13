@@ -20,15 +20,24 @@
 // hears of them again. Two members may still lead at once for that short
 // while; what a leader does outside the group should carry its term.
 //
-// A member keeps its term, its vote and its log in a [Storage], and,
-// restarted, rejoins its group with them. It grants a vote, and
-// acknowledges entries, once they are durable there.
+// # Members
+//
+// Who the members are is in the log, a [Config] of voters and learners:
+// a majority of the voters elects the leader and commits. [Found] founds
+// a group once, its first configuration written alike into the logs of
+// its first members.
+//
+// A member is known by the PID it first had on its storage, blank. It
+// keeps its identity, its term, its vote and its log in a [Storage], and,
+// restarted, rejoins its group with them; it grants a vote, and
+// acknowledges entries, once they are durable there. On a new disk, or
+// without a storage, a member restarted is another, in no configuration:
+// it neither votes nor stands, nor takes what is sent to the one before
+// it, until the group has it.
 //
 // # What there is not yet
 //
-// A member whose storage is lost, on a new disk, must not rejoin its
-// group as it was: it would vote again in a term, and forget entries the
-// others count on it for. Nothing stops it yet, and members cannot be
-// removed and added again. There are no snapshots, and a read is a
-// command, committed as any other.
+// Members cannot be added and removed yet: a member on a new disk waits
+// for good. There are no snapshots, and a read is a command, committed as
+// any other.
 package quorum
