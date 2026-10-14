@@ -2,6 +2,7 @@ package quorum_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -18,6 +19,27 @@ import (
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
 )
+
+// raise has group keep n, if higher, and returns what it keeps: sent
+// again if its leader lost its place, as a number changes nothing then.
+func raise(ctx context.Context, caller actor.Caller, group string, n int) (int, error) {
+	for {
+		h, err := quorum.Command[int](ctx, caller, group, names, n)
+		if !errors.Is(err, quorum.ErrLeaderChanged) {
+			return h, err
+		}
+	}
+}
+
+// highest keeps the highest number it is given: sent again, a number
+// changes nothing.
+type highest struct{}
+
+func (highest) Init() int { return 0 }
+
+func (highest) Apply(h, n int) (int, int, []actor.Effect) { return max(h, n), max(h, n), nil }
+
+func (highest) Read(h, _ int) int { return h }
 
 // counter sums the numbers it is given, and reads the sum.
 type counter struct{}
@@ -36,6 +58,7 @@ var names = []string{"a@localhost", "b@localhost", "c@localhost"}
 // dist: on each, the storage and the members of the groups.
 type cluster struct {
 	t       *testing.T
+	machine quorum.Machine[int, int, int]
 	groups  []string
 	dynamic bool // the groups started at runtime, under Groups
 	dir     string
@@ -50,8 +73,8 @@ type node struct {
 	sup proc.PID
 }
 
-func newCluster(t *testing.T, groups ...string) *cluster {
-	c := &cluster{t: t, groups: groups, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
+func newCluster(t *testing.T, m quorum.Machine[int, int, int], groups ...string) *cluster {
+	c := &cluster{t: t, machine: m, groups: groups, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
 	for _, name := range names {
 		c.start(name)
 	}
@@ -78,11 +101,11 @@ func (c *cluster) start(name string) {
 	children := []supervisor.ChildSpec{{ID: "storage", Start: quorum.Storage(dir)}}
 	if c.dynamic {
 		children = append(children, supervisor.ChildSpec{ID: "groups", Start: quorum.Groups(dir, func(g string) (gen.Child, error) {
-			return quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: counter{}, Dir: dir}), nil
+			return quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: c.machine, Dir: dir}), nil
 		})})
 	}
 	for _, g := range c.groups {
-		children = append(children, supervisor.ChildSpec{ID: g, Start: quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: counter{}, Dir: dir})})
+		children = append(children, supervisor.ChildSpec{ID: g, Start: quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: c.machine, Dir: dir})})
 	}
 	sup, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForAll, Children: children})
 	if err != nil {
@@ -169,7 +192,7 @@ func ctx(t *testing.T) context.Context {
 // member in its storage, adds what a Client sends, while each node in
 // turn is stopped and started again from its disk.
 func TestQuorum(t *testing.T) {
-	c := newCluster(t, group)
+	c := newCluster(t, counter{}, group)
 	a := c.nodes[names[0]].n
 	if err := quorum.Found(ctx(t), a, group, names); err != nil {
 		t.Fatal(err)
@@ -213,17 +236,20 @@ func TestManyGroups(t *testing.T) {
 	for i := range n {
 		groups = append(groups, fmt.Sprintf("g%d", i))
 	}
-	c := newCluster(t, groups...)
+	c := newCluster(t, highest{}, groups...)
 	a := c.nodes[names[0]].n
 	each(t, groups, func(g string) error { return quorum.Found(ctx(t), a, g, names) })
-	add := func(g string) error {
-		_, err := quorum.Command[int](ctx(t), a, g, names, 1)
+	step := 0
+	next := func(g string) error {
+		_, err := raise(ctx(t), a, g, step)
 		return err
 	}
 	for _, down := range names[1:] { // a asks
-		each(t, groups, add)
+		step++
+		each(t, groups, next)
 		c.stop(down)
-		each(t, groups, add)
+		step++
+		each(t, groups, next)
 		c.start(down)
 	}
 	for _, name := range names {
@@ -263,7 +289,7 @@ func each(t *testing.T, groups []string, f func(g string) error) {
 // The lead moves to each node in turn, over dist, the group taking
 // commands after each move.
 func TestTransferLeader(t *testing.T) {
-	c := newCluster(t, group)
+	c := newCluster(t, highest{}, group)
 	a := c.nodes[names[0]].n
 	if err := quorum.Found(ctx(t), a, group, names); err != nil {
 		t.Fatal(err)
@@ -272,15 +298,15 @@ func TestTransferLeader(t *testing.T) {
 		if err := quorum.TransferLeader(ctx(t), a, group, names, to); err != nil {
 			t.Fatalf("to %s: %v", to, err)
 		}
-		if sum, err := quorum.Command[int](ctx(t), a, group, names, 1); err != nil || sum != i+1 {
-			t.Fatalf("after moving to %s: %d, %v", to, sum, err)
+		if h, err := raise(ctx(t), a, group, i+1); err != nil || h != i+1 {
+			t.Fatalf("after moving to %s: %d, %v", to, h, err)
 		}
 	}
 }
 
 // newDynamic returns a cluster whose groups are started at runtime.
 func newDynamic(t *testing.T) *cluster {
-	c := &cluster{t: t, dynamic: true, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
+	c := &cluster{t: t, machine: highest{}, dynamic: true, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
 	for _, name := range names {
 		c.start(name)
 	}
@@ -318,8 +344,8 @@ func TestCreateGroup(t *testing.T) {
 		if err := quorum.CreateGroup(ctx(t), a, g, names); err != nil { // again, as after failing midway
 			t.Fatal(err)
 		}
-		if sum, err := quorum.Command[int](ctx(t), a, g, names, 2); err != nil || sum != 2 {
-			t.Fatalf("%s: %d, %v", g, sum, err)
+		if h, err := raise(ctx(t), a, g, 2); err != nil || h != 2 {
+			t.Fatalf("%s: %d, %v", g, h, err)
 		}
 	}
 
@@ -328,8 +354,8 @@ func TestCreateGroup(t *testing.T) {
 	c.start(b) // runs x and y again
 	c.stop(cc) // so that b's members must take part
 	for _, g := range []string{"x", "y"} {
-		if sum, err := quorum.Command[int](ctx(t), a, g, names, 1); err != nil || sum != 3 {
-			t.Fatalf("%s, b started again, c down: %d, %v", g, sum, err)
+		if h, err := raise(ctx(t), a, g, 3); err != nil || h != 3 {
+			t.Fatalf("%s, b started again, c down: %d, %v", g, h, err)
 		}
 	}
 	c.start(cc)
@@ -342,7 +368,7 @@ func TestCreateGroup(t *testing.T) {
 	}
 	c.stop(b)
 	c.start(b)
-	if _, err := quorum.Command[int](ctx(t), a, "y", names, 1); err != nil {
+	if _, err := raise(ctx(t), a, "y", 4); err != nil {
 		t.Fatal(err)
 	}
 	if on := c.runs("x"); len(on) != 0 {
