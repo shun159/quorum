@@ -59,19 +59,19 @@ func (h holder) HandleInfo(held map[string]uint64, msg any) (map[string]uint64, 
 			held = map[string]uint64{}
 		}
 		held[m.Name] = m.Token
-		return held, actor.Do(h.show("%s: held here, token %d", m.Name, m.Token), h.workLater(m.Name, m.Token))
+		return held, actor.Do(h.show("this node holds the lock %q, token %d", m.Name, m.Token), h.workLater(m.Name, m.Token))
 	case Released:
 		if held[m.Name] != m.Token {
 			return held, nil
 		}
 		held = maps.Clone(held)
 		delete(held, m.Name)
-		return held, actor.Do(h.show("%s: released", m.Name), actor.CancelTimer{Key: m.Name})
+		return held, actor.Do(h.show("this node freed the lock %q", m.Name), actor.CancelTimer{Key: m.Name})
 	case working:
 		if held[m.name] != m.token {
 			return held, nil
 		}
-		return held, actor.Do(h.show("%s: working with token %d", m.name, m.token), h.workLater(m.name, m.token))
+		return held, actor.Do(h.show("working with the lock %q, token %d", m.name, m.token), h.workLater(m.name, m.token))
 	}
 	return held, nil
 }

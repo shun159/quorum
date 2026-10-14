@@ -17,14 +17,14 @@
 //	go run ./examples/locks -name c@localhost
 //
 // Once the three are up, found the group, once, on any of them; then take
-// locks, for the node they are typed on:
+// locks, by any name, for the node they are typed on:
 //
 //	found
 //	founded on a@localhost, b@localhost, c@localhost
 //	lock printer
-//	*** printer: held here, token 1
+//	*** this node holds the lock "printer", token 1
 //	ok, token 1
-//	*** printer: working with token 1
+//	*** working with the lock "printer", token 1
 //
 // The leader tells the node that took the lock, an effect of the machine,
 // which only the leader performs; the holder of the node works with it

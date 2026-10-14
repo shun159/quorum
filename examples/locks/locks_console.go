@@ -20,11 +20,14 @@ type console struct {
 	out   io.Writer
 }
 
-const usage = "found, lock NAME, unlock NAME, or who NAME"
+const usage = `found         found the group: once all are up, on one of them, once
+lock NAME     take the lock NAME, any name, as printer, for this node
+unlock NAME   free it
+who NAME      tell who holds it`
 
 func (c console) run(in io.Reader) {
 	fmt.Fprintf(c.out, "locks on %s, one of %s\n", c.n.Name(), strings.Join(c.nodes, ", "))
-	fmt.Fprintln(c.out, "once all are up, type found on one of them, once; then lock NAME, unlock NAME, or who NAME")
+	fmt.Fprintln(c.out, usage)
 	sc := bufio.NewScanner(in)
 	for sc.Scan() {
 		switch f := strings.Fields(sc.Text()); {

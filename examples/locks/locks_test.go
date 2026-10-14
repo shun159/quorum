@@ -164,7 +164,7 @@ func TestLocks(t *testing.T) {
 	if err != nil || !r.OK || r.Holder.Token != 1 {
 		t.Fatalf("lock printer: %+v, %v", r, err)
 	}
-	c.see(a.Name(), "*** printer: held here, token 1")
+	c.see(a.Name(), `*** this node holds the lock "printer", token 1`)
 
 	last := r.Holder.Token
 	for i, down := range names {
@@ -180,7 +180,7 @@ func TestLocks(t *testing.T) {
 		if err != nil || !r.OK || r.Holder.Token <= last {
 			t.Fatalf("%s down: lock door: %+v, %v, after token %d", down, r, err, last)
 		}
-		c.see(up.Name(), fmt.Sprintf("*** door %s: held here, token %d", down, r.Holder.Token))
+		c.see(up.Name(), fmt.Sprintf("*** this node holds the lock \"door %s\", token %d", down, r.Holder.Token))
 		last = r.Holder.Token
 		c.start(down)
 	}
@@ -189,9 +189,9 @@ func TestLocks(t *testing.T) {
 	if r, err := Lock(ctx(t), a, names, "scanner", a.Name()); err != nil || !r.OK {
 		t.Fatalf("lock scanner: %+v, %v", r, err)
 	}
-	c.see(a.Name(), fmt.Sprintf("*** scanner: held here, token %d", last+1))
+	c.see(a.Name(), fmt.Sprintf("*** this node holds the lock \"scanner\", token %d", last+1))
 	if r, err := Unlock(ctx(t), a, names, "scanner", a.Name()); err != nil || !r.OK {
 		t.Fatalf("unlock scanner: %+v, %v", r, err)
 	}
-	c.see(a.Name(), "*** scanner: released")
+	c.see(a.Name(), `*** this node freed the lock "scanner"`)
 }
