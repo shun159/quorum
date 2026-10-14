@@ -2,6 +2,7 @@ package quorum_test
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"path/filepath"
 	"sync"
@@ -30,13 +31,14 @@ const group = "counter"
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
 
 // cluster is a node for each of names, in this process, connected by
-// dist: on each, the storage and the member of the group.
+// dist: on each, the storage and the members of the groups.
 type cluster struct {
-	t     *testing.T
-	dir   string
-	mu    sync.Mutex
-	addrs map[string]string
-	nodes map[string]*node
+	t      *testing.T
+	groups []string
+	dir    string
+	mu     sync.Mutex
+	addrs  map[string]string
+	nodes  map[string]*node
 }
 
 type node struct {
@@ -45,8 +47,8 @@ type node struct {
 	sup proc.PID
 }
 
-func newCluster(t *testing.T) *cluster {
-	c := &cluster{t: t, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
+func newCluster(t *testing.T, groups ...string) *cluster {
+	c := &cluster{t: t, groups: groups, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
 	for _, name := range names {
 		c.start(name)
 	}
@@ -70,13 +72,11 @@ func (c *cluster) start(name string) {
 	c.addrs[name] = d.Addr().String()
 	c.mu.Unlock()
 	dir := filepath.Join(c.dir, name)
-	sup, err := supervisor.Start(context.Background(), n, supervisor.Spec{
-		Strategy: supervisor.OneForAll,
-		Children: []supervisor.ChildSpec{
-			{ID: "storage", Start: quorum.Storage(dir)},
-			{ID: "member", Start: quorum.Child(quorum.Spec[int, int, int]{Group: group, Machine: counter{}, Dir: dir})},
-		},
-	})
+	children := []supervisor.ChildSpec{{ID: "storage", Start: quorum.Storage(dir)}}
+	for _, g := range c.groups {
+		children = append(children, supervisor.ChildSpec{ID: g, Start: quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: counter{}, Dir: dir})})
+	}
+	sup, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForAll, Children: children})
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func ctx(t *testing.T) context.Context {
 // member in its storage, adds what a Client sends, while each node in
 // turn is stopped and started again from its disk.
 func TestQuorum(t *testing.T) {
-	c := newCluster(t)
+	c := newCluster(t, group)
 	a := c.nodes[names[0]].n
 	if err := quorum.Found(ctx(t), a, group, names); err != nil {
 		t.Fatal(err)
@@ -192,6 +192,62 @@ func TestQuorum(t *testing.T) {
 	for _, name := range names {
 		if got, err := quorum.Read[int](ctx(t), c.nodes[name].n, group, names, 0); err != nil || got != sum {
 			t.Errorf("read on %s: %d, %v, want %d", name, got, err, sum)
+		}
+	}
+}
+
+// Many groups keep their members in the one storage of each node: each
+// node stopped and started again in turn, every group goes on, with all
+// it applied.
+func TestManyGroups(t *testing.T) {
+	const n = 300
+	var groups []string
+	for i := range n {
+		groups = append(groups, fmt.Sprintf("g%d", i))
+	}
+	c := newCluster(t, groups...)
+	a := c.nodes[names[0]].n
+	each(t, groups, func(g string) error { return quorum.Found(ctx(t), a, g, names) })
+	add := func(g string) error {
+		_, err := quorum.Command[int](ctx(t), a, g, names, 1)
+		return err
+	}
+	for _, down := range names[1:] { // a asks
+		each(t, groups, add)
+		c.stop(down)
+		each(t, groups, add)
+		c.start(down)
+	}
+	for _, name := range names {
+		each(t, groups, func(g string) error {
+			if sum, err := quorum.Read[int](ctx(t), c.nodes[name].n, g, names, 0); err != nil || sum != 4 {
+				return fmt.Errorf("read through %s: %d, %v", name, sum, err)
+			}
+			return nil
+		})
+	}
+}
+
+// each runs f on every group, a few at once, and fails the test on the
+// first error.
+func each(t *testing.T, groups []string, f func(g string) error) {
+	t.Helper()
+	errs := make(chan error, len(groups))
+	sem := make(chan struct{}, 16)
+	for _, g := range groups {
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			if err := f(g); err != nil {
+				errs <- fmt.Errorf("%s: %w", g, err)
+				return
+			}
+			errs <- nil
+		}()
+	}
+	for range groups {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
 		}
 	}
 }
