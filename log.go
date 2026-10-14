@@ -3,13 +3,16 @@ package quorum
 import "slices"
 
 // Entry is a command in the log, with the term of the leader that
-// appended it, or a configuration of the group. The entry a leader appends
-// on being elected has neither, and the first of the log, founding the
-// group, has the term 0.
+// appended it, or a configuration of the group, or the opening of a
+// session. The entry a leader appends on being elected has none, and the
+// first of the log, founding the group, has the term 0.
 type Entry struct {
 	Term   uint64
+	Time   int64 // the clock of the leader that appended it, see Sessions
 	Cmd    any
+	From   Origin // of Cmd, if from a session
 	Config *Config
+	Open   bool // opens a session, whose ID is the index of the entry
 }
 
 // raftLog is the log of a member: its entries after start, those up to

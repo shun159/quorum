@@ -15,6 +15,8 @@ func (b behaviour[S, Cmd, Rep]) takeSnapshot(d *replica[S]) []actor.Effect {
 		Term:   d.log.termAt(d.applied),
 		Config: d.log.configUpTo(d.applied),
 		State:  d.state,
+
+		Sessions: d.sessions,
 	}
 	d.log = d.log.compact(d.snapshot, true)
 	return b.saveSnapshot(d)
@@ -36,7 +38,7 @@ func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d replica[S], m installS
 		return r, d, append(effs, d.after(reply)...) // committed here already
 	}
 	keep := d.log.has(snap.Index, snap.Term)
-	d.snapshot, d.state = snap, snap.State.(S)
+	d.snapshot, d.state, d.sessions = snap, snap.State.(S), snap.Sessions
 	d.log = d.log.compact(snap, keep)
 	d.logChanged()
 	d.commit, d.applied = snap.Index, snap.Index

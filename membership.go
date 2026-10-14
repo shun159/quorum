@@ -69,8 +69,8 @@ func (d *replica[S]) foundedWith(config Config) bool {
 // for the leader. The member joins as a learner, following the log without
 // voting; once it has caught up, the leader makes it a voter. AddMember
 // returns then, once the member counts toward a majority, which one cut
-// off may take long to: ctx bounds the wait. Run again, as after
-// ErrLeaderChanged, it waits on.
+// off may take long to: ctx bounds the wait. Should the leader change, it
+// asks the next, and waits on.
 //
 // The node must have no member in the group: one on a new disk, which
 // replaces another on the node, is added once that one is removed. Disks
@@ -185,7 +185,7 @@ func (b behaviour[S, Cmd, Rep]) promote(r role, d *replica[S], p peer) []actor.E
 // members, those it adds included. Those it removes still get it, to
 // learn they are out, until it is committed.
 func (b behaviour[S, Cmd, Rep]) appendConfig(r role, d *replica[S], config Config) []actor.Effect {
-	d.log = d.log.add(Entry{Term: d.term, Config: &config})
+	d.log = d.log.add(b.entry(d, Entry{Config: &config}))
 	d.logChanged()
 	for _, id := range d.others() {
 		if d.peer(id) == nil {

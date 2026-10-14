@@ -17,7 +17,7 @@ func TestUnfounded(t *testing.T) {
 	if l, ok := g.anyLeader(); ok {
 		t.Fatalf("%s leads a group never founded", l)
 	}
-	v, err := g.s.Call(g.at("a"), command{1})
+	v, err := g.s.Call(g.at("a"), command{Cmd: 1})
 	if err != nil || v != (redirect{}) {
 		t.Errorf("command: %#v, %v", v, err)
 	}

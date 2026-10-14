@@ -185,7 +185,7 @@ func (g *group) anyLeader() (string, bool) {
 // simulation.
 func (g *group) command(n int) (int, error) {
 	g.t.Helper()
-	v, err := g.ask(command{n})
+	v, err := g.ask(command{Cmd: n})
 	if err != nil {
 		return 0, err
 	}
@@ -363,7 +363,7 @@ func TestWrongCommand(t *testing.T) {
 	g := newGroup(t, 1, three)
 	g.run(time.Second)
 	l := g.leader()
-	v, err := g.s.Call(actor.Remote{Node: l, Name: replicaName(g.name)}, command{"one"})
+	v, err := g.s.Call(actor.Remote{Node: l, Name: replicaName(g.name)}, command{Cmd: "one"})
 	if r, ok := v.(rejected); err != nil || !ok {
 		t.Fatalf("got %#v, %v", r, err)
 	}

@@ -26,6 +26,9 @@ type Spec[S, Cmd, Rep any] struct {
 	// snapshot of its machine, in their place: zero means
 	// DefaultSnapshotEvery.
 	SnapshotEvery uint64
+	// SessionTimeout is how long, by the time of the log, a session of a
+	// Client lasts without a command: zero means DefaultSessionTimeout.
+	SessionTimeout time.Duration
 	// Storage keeps who the member is, its term, its vote and its log
 	// across restarts, each member its own. Without one, the member keeps
 	// them in memory only: restarted, it is another member, which the
@@ -38,6 +41,9 @@ const DefaultElectionTimeout = 300 * time.Millisecond
 
 // DefaultSnapshotEvery is Spec.SnapshotEvery when zero.
 const DefaultSnapshotEvery = 10000
+
+// DefaultSessionTimeout is Spec.SessionTimeout when zero.
+const DefaultSessionTimeout = time.Minute
 
 // replicaName is the name of the member of group on each node.
 func replicaName(group string) string { return "quorum/" + group }
@@ -52,6 +58,9 @@ func (spec Spec[S, Cmd, Rep]) withDefaults() Spec[S, Cmd, Rep] {
 	}
 	if spec.SnapshotEvery == 0 {
 		spec.SnapshotEvery = DefaultSnapshotEvery
+	}
+	if spec.SessionTimeout == 0 {
+		spec.SessionTimeout = DefaultSessionTimeout
 	}
 	return spec
 }

@@ -12,11 +12,6 @@
 // lost while a majority of the group lives, and the leader applies it and
 // replies. A group of 2f+1 members bears f of them failing.
 //
-// [Command] sends a command and waits for its reply, which the callbacks
-// of a behaviour must not do: a behaviour keeps a [Client] in its state
-// instead, whose commands are effects, and whose results come of the
-// messages it hands back to it.
-//
 // A Machine that also implements [Leader] learns when its member becomes
 // the leader, and when it stops being one: to run something on one node of
 // the group only, a singleton. A leader that has not heard from a majority
@@ -57,6 +52,21 @@
 // its log does not grow for good. The leader sends its own to a member
 // missing entries it has no more, as one added to the group, which takes
 // it in place of its machine and of its log up to there.
+//
+// # Clients
+//
+// [Command] sends a command and waits for its reply; should its leader be
+// lost meanwhile, it cannot know whether the command was applied, and
+// says so. A [Client] waits for nothing, which the callbacks of a
+// behaviour must not do: kept in the state of the behaviour, its commands
+// are effects, and its results come of the messages handed back to it.
+//
+// A Client opens a session with the group, in which each of its commands
+// is applied once however many times it is sent, so it sends them again
+// until they are: through members down, leaders deposed, and replies
+// lost. The members keep the sessions with their machine, in their
+// snapshots too, and forget a session idle for SessionTimeout, by the time
+// of the log.
 //
 // # Reads
 //

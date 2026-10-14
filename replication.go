@@ -16,7 +16,7 @@ const maxEntries = 64
 // others, and starts beating.
 func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
 	d.leader, d.votes = d.id, nil
-	d.log = d.log.add(Entry{Term: d.term})
+	d.log = d.log.add(b.entry(d, Entry{}))
 	d.peers, d.round = nil, 0
 	for _, id := range d.others() {
 		d.peers = append(d.peers, peer{id: id, next: d.log.lastIndex()})
@@ -186,17 +186,10 @@ func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 	var effs []actor.Effect
 	for d.applied < d.commit {
 		d.applied++
-		e := d.log.at(d.applied)
-		var rep any
-		if e.Cmd != nil { // not the entry of an election, nor a configuration
-			state, out, more := b.spec.Machine.Apply(d.state, e.Cmd.(Cmd))
-			d.state, rep = state, out
-			if r == leader {
-				effs = append(effs, more...)
-			}
-		}
+		reply, more := b.applyEntry(d, d.applied, d.log.at(d.applied))
 		if r == leader {
-			effs = append(effs, d.reply(d.applied, rep)...)
+			effs = append(effs, more...)
+			effs = append(effs, d.reply(d.applied, reply)...)
 		}
 	}
 	if r == leader {
@@ -206,13 +199,48 @@ func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 	return append(effs, b.takeSnapshot(d)...)
 }
 
-// reply answers the command or the change at index, if the leader
+// applyEntry applies e, at index, and returns the reply to its client,
+// and the effects of the machine. A command of a session applied before
+// is not applied again: its reply is the first's. One of a session
+// expired is not applied.
+func (b behaviour[S, Cmd, Rep]) applyEntry(d *replica[S], index uint64, e Entry) (any, []actor.Effect) {
+	d.sessions = d.sessions.passed(e.Time, b.spec.SessionTimeout)
+	switch {
+	case e.Open:
+		d.sessions = d.sessions.opened(index)
+		return applied{Rep: index}, nil
+	case e.Cmd == nil: // the entry of an election, or a configuration
+		return applied{}, nil
+	case e.From.Session == 0:
+		return b.applyCmd(d, e.Cmd)
+	}
+	open, done, rep := d.sessions.seen(e.From)
+	switch {
+	case !open:
+		return expired{}, nil
+	case done:
+		d.sessions = d.sessions.applied(e.From, rep)
+		return applied{rep}, nil
+	}
+	reply, effs := b.applyCmd(d, e.Cmd)
+	d.sessions = d.sessions.applied(e.From, reply.Rep)
+	return reply, effs
+}
+
+// applyCmd applies cmd to the machine.
+func (b behaviour[S, Cmd, Rep]) applyCmd(d *replica[S], cmd any) (applied, []actor.Effect) {
+	state, rep, effs := b.spec.Machine.Apply(d.state, cmd.(Cmd))
+	d.state = state
+	return applied{rep}, effs
+}
+
+// reply answers the command or the change at index with v, if the leader
 // appended it.
-func (d *replica[S]) reply(index uint64, rep any) []actor.Effect {
+func (d *replica[S]) reply(index uint64, v any) []actor.Effect {
 	if len(d.pending) == 0 || d.pending[0].index != index {
 		return nil
 	}
 	p := d.pending[0]
 	d.pending = d.pending[1:]
-	return actor.Do(actor.Reply{To: p.from, Value: applied{rep}})
+	return actor.Do(actor.Reply{To: p.from, Value: v})
 }

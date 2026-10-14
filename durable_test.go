@@ -16,7 +16,7 @@ var ida, idb, idc = proc.NewNode("a").NewPID(), proc.NewNode("b").NewPID(), proc
 func member(t *testing.T) (behaviour[int, int, int], replica[int]) {
 	t.Helper()
 	spec := Spec[int, int, int]{Group: "g", Machine: counter{}, Storage: &memStorage{}}
-	b := behaviour[int, int, int]{spec.withDefaults()}
+	b := behaviour[int, int, int]{spec: spec.withDefaults()}
 	_, d, _, err := b.Init(idb)
 	if err != nil {
 		t.Fatal(err)

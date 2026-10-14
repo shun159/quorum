@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"math/rand/v2"
 	"slices"
+	"time"
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/genstatem"
@@ -41,6 +42,7 @@ type replica[S any] struct {
 	commit   uint64   // the last index known committed
 	applied  uint64   // the last index applied to state
 	state    S        // of the machine
+	sessions Sessions // of the clients, as of applied
 
 	votes   []proc.PID // granted to it, as a candidate or precandidate
 	peers   []peer     // the other members, as the leader
@@ -81,9 +83,25 @@ type joining struct {
 // behaviour is a member of a group, a genstatem with state enter calls.
 type behaviour[S, Cmd, Rep any] struct {
 	spec Spec[S, Cmd, Rep]
+	now  func() time.Time // the clock of the process, for the leader to stamp entries
 }
 
 func (behaviour[S, Cmd, Rep]) StateEnter() bool { return true }
+
+// WithClock gives the member the clock of its process: see actor.Clocked.
+func (b behaviour[S, Cmd, Rep]) WithClock(now func() time.Time) any {
+	b.now = now
+	return b
+}
+
+// entry returns e as the leader appends it, of its term, at its time.
+func (b behaviour[S, Cmd, Rep]) entry(d *replica[S], e Entry) Entry {
+	e.Term = d.term
+	if b.now != nil {
+		e.Time = b.now().UnixNano()
+	}
+	return e
+}
 
 // Init loads what the member saved. On a blank storage, the member is a
 // new one, known by its PID, which it saves first.
@@ -108,7 +126,7 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		if !ok {
 			return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s saved a snapshot of a %T", b.spec.Group, snap.State)
 		}
-		d.snapshot, d.state = snap, state
+		d.snapshot, d.state, d.sessions = snap, state, snap.Sessions
 		d.log = raftLog{start: snap.Index, startTerm: snap.Term, startConfig: snap.Config, entries: saved.Log}
 		d.commit, d.applied = snap.Index, snap.Index
 	}

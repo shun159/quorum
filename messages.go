@@ -7,7 +7,7 @@ import (
 
 func init() {
 	dist.Register(preVote{}, preVoteReply{}, requestVote{}, voteReply{}, appendEntries{}, appendReply{},
-		whoLeads{}, command{}, read{}, applied{}, redirect{}, deposed{}, rejected{},
+		whoLeads{}, command{}, read{}, applied{}, expired{}, openSession{}, Origin{}, redirect{}, deposed{}, rejected{},
 		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{},
 		installSnapshot{})
 }
@@ -93,12 +93,18 @@ func (m installSnapshot) to() proc.PID { return m.To }
 // A command from a client, and the replies it may get.
 type (
 	whoLeads struct{} // answered with a redirect, to the member itself if it leads
-	command  struct{ Cmd any }
+	command  struct {
+		Cmd  any
+		From Origin // its session, if any, see Client
+	}
 	read     struct{ Cmd any }       // answered by the leader, not appended
 	applied  struct{ Rep any }       // applied, with its reply
 	redirect struct{ Leader string } // not appended; the node of the leader, if known
 	deposed  struct{}                // appended, but the leader lost its place: applied or not
-	rejected struct{ Reason string } // not taken
+	expired  struct{}                // not applied: its session expired
+
+	openSession struct{}                // answered with applied, the ID of the session
+	rejected    struct{ Reason string } // not taken
 )
 
 // Founding a group: who a member is, and the first configuration.

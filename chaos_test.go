@@ -26,7 +26,7 @@ type client struct {
 type outcomes struct {
 	quorum  Client[int, int]
 	acked   int // applied, the leader said
-	unknown int // applied or not: the leader changed, or did not answer
+	unknown int // ended with an error: applied or not
 	asked   int // commands and reads sent
 
 	reads int   // answered
@@ -162,8 +162,9 @@ func spawn[S any](g *group, b gen.Behaviour[S], node string) proc.PID {
 	return pid
 }
 
-// checkCount checks that the members all hold the same count, which has
-// every command o has acknowledged, and no more than it sent.
+// checkCount checks that the members all hold the same count: every add
+// applied once, those acknowledged and, maybe, the one still out. In its
+// session, no add ends unknown.
 func (g *group) checkCount(seed uint64, o outcomes) {
 	g.t.Helper()
 	_, d, _ := g.member(g.members[0])
@@ -172,9 +173,11 @@ func (g *group) checkCount(seed uint64, o outcomes) {
 			g.t.Fatalf("seed %d: %s holds %d, %s %d", seed, m, dm.state, g.members[0], d.state)
 		}
 	}
-	out := o.unknown + o.quorum.Out()
-	if d.state < o.acked || d.state > o.acked+out {
-		g.t.Fatalf("seed %d: count %d, with %d acknowledged and %d unknown", seed, d.state, o.acked, out)
+	if o.unknown > 0 {
+		g.t.Fatalf("seed %d: %d adds ended unknown", seed, o.unknown)
+	}
+	if out := o.quorum.Out(); d.state < o.acked || d.state > o.acked+out {
+		g.t.Fatalf("seed %d: count %d, with %d acknowledged and %d out", seed, d.state, o.acked, out)
 	}
 	if o.acked == 0 || o.reads == 0 {
 		g.t.Errorf("seed %d: %d acknowledged, %d read", seed, o.acked, o.reads)

@@ -18,7 +18,7 @@ import (
 // a member: founding the group, see Found, or added to it.
 func Child[S, Cmd, Rep any](spec Spec[S, Cmd, Rep]) gen.Child {
 	spec = spec.withDefaults()
-	return genstatem.Child(behaviour[S, Cmd, Rep]{spec}, actor.WithName(actor.Local(replicaName(spec.Group))))
+	return genstatem.Child(behaviour[S, Cmd, Rep]{spec: spec}, actor.WithName(actor.Local(replicaName(spec.Group))))
 }
 
 // ErrLeaderChanged is the error of a command whose leader lost its place
@@ -37,10 +37,10 @@ const retryAfter = 50 * time.Millisecond
 // An error other than ctx's means cmd may have been applied or not: its
 // leader lost its place, see ErrLeaderChanged, or was lost while it had
 // cmd. Command does not try it again, as applying it twice may differ from
-// once.
+// once. A Client does, in a session, which has the group apply it once.
 func Command[Rep, Cmd any](ctx context.Context, caller actor.Caller, group string, nodes []string, cmd Cmd) (Rep, error) {
 	var zero Rep
-	v, err := ask(ctx, caller, group, nodes, command{cmd})
+	v, err := ask(ctx, caller, group, nodes, command{Cmd: cmd})
 	if err != nil {
 		return zero, err
 	}
@@ -128,9 +128,10 @@ type answer struct {
 // it is, if it knows; the leader busy with a change of members has the
 // request wait for it.
 //
-// A request safe to send twice, as a read, goes to the next member if the
-// node is down, or did not answer in time. A command does not: the node
-// may have had it, and applied it.
+// A request safe to send twice, as a read or a command of a session, goes
+// to the next member if the node is down, or did not answer in time, and
+// is sent again if its leader lost its place. A command without a session
+// is not: the node may have had it, and applied it.
 func answerOf(nodes []string, node string, v any, err error, safe bool) answer {
 	switch {
 	case errors.Is(err, proc.NoProc):
@@ -145,7 +146,12 @@ func answerOf(nodes []string, node string, v any, err error, safe bool) answer {
 	case applied:
 		return answer{done: true, v: r}
 	case deposed:
+		if safe {
+			return answer{node: node, pause: true} // sent again, applied once
+		}
 		return answer{done: true, err: ErrLeaderChanged}
+	case expired:
+		return answer{done: true, err: ErrSessionExpired}
 	case rejected:
 		return answer{done: true, err: errors.New(r.Reason)}
 	case redirect:
@@ -181,6 +187,8 @@ func (b behaviour[S, Cmd, Rep]) call(r role, d replica[S], c genstatem.Call) (ro
 		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	case command:
 		return b.command(r, d, c, m)
+	case openSession:
+		return b.openSession(r, d, c)
 	case read:
 		return b.read(r, d, c, m)
 	case identify:
@@ -204,9 +212,24 @@ func (b behaviour[S, Cmd, Rep]) command(r role, d replica[S], c genstatem.Call, 
 	if r != leader {
 		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	}
-	d.log = d.log.add(Entry{Term: d.term, Cmd: m.Cmd})
+	return r, d, b.appendCall(r, &d, c, Entry{Cmd: m.Cmd, From: m.From})
+}
+
+// appendCall has the leader append e, to reply to the call c once it is
+// applied.
+func (b behaviour[S, Cmd, Rep]) appendCall(r role, d *replica[S], c genstatem.Call, e Entry) []actor.Effect {
+	d.log = d.log.add(b.entry(d, e))
 	d.pending = append(d.pending, pending{index: d.log.lastIndex(), from: c.From})
-	effs := b.saveLog(&d, d.log.lastIndex())
-	effs = append(effs, b.replicate(d)...)
-	return r, d, append(effs, b.commit(r, &d)...)
+	effs := b.saveLog(d, d.log.lastIndex())
+	effs = append(effs, b.replicate(*d)...)
+	return append(effs, b.commit(r, d)...)
+}
+
+// openSession handles the opening of a session: the leader appends it,
+// and replies with its ID once it is applied.
+func (b behaviour[S, Cmd, Rep]) openSession(r role, d replica[S], c genstatem.Call) (role, replica[S], []actor.Effect) {
+	if r != leader {
+		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
+	}
+	return r, d, b.appendCall(r, &d, c, Entry{Open: true})
 }

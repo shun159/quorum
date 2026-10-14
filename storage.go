@@ -40,13 +40,15 @@ type State struct {
 }
 
 // Snapshot is the state of the machine once the entries up to Index are
-// applied, with the term of the last of them, and the configuration in
-// force then: it takes the place of those entries.
+// applied, with the term of the last of them, the configuration in force
+// then, and the sessions of the clients: it takes the place of those
+// entries.
 type Snapshot struct {
-	Index  uint64
-	Term   uint64
-	Config Config
-	State  any
+	Index    uint64
+	Term     uint64
+	Config   Config
+	State    any
+	Sessions Sessions
 }
 
 // Saved is what a member saved: its state, its snapshot, if Index is not
