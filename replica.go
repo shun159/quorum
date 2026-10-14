@@ -15,13 +15,14 @@ import (
 type role int
 
 const (
-	follower role = iota
+	follower     role = iota
+	precandidate      // asking whether it would be voted for, see preStand
 	candidate
 	leader
 )
 
 func (r role) String() string {
-	return [...]string{"follower", "candidate", "leader"}[r]
+	return [...]string{"follower", "precandidate", "candidate", "leader"}[r]
 }
 
 // replica is the data of a member of a group.
@@ -41,7 +42,7 @@ type replica[S any] struct {
 	applied  uint64   // the last index applied to state
 	state    S        // of the machine
 
-	votes   []proc.PID // granted to it, as a candidate
+	votes   []proc.PID // granted to it, as a candidate or precandidate
 	peers   []peer     // the other members, as the leader
 	pending []pending  // commands to reply to, as the leader, by index
 	joining []joining  // members added, to reply to once voters, as the leader
@@ -180,8 +181,9 @@ func (b behaviour[S, Cmd, Rep]) enter(r, old role, d replica[S]) (role, replica[
 	return r, d, effs
 }
 
-// timeout is the state timeout: a voter that heard from no leader stands
-// for election; the leader beats. A member not voting waits on.
+// timeout is the state timeout: a voter that heard from no leader asks
+// whether it would be elected; the leader beats. A member not voting
+// waits on.
 func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S], []actor.Effect) {
 	switch {
 	case r == leader:
@@ -189,7 +191,7 @@ func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S],
 	case !d.config.isVoter(d.id):
 		return r, d, actor.Do(d.electionTimer(b.spec.ElectionTimeout))
 	}
-	return b.stand(d)
+	return b.preStand(d)
 }
 
 // message handles a message from another member. One of a later term
@@ -211,6 +213,10 @@ func (b behaviour[S, Cmd, Rep]) message(r role, d replica[S], msg any) (role, re
 
 func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, replica[S], []actor.Effect) {
 	switch m := msg.(type) {
+	case preVote:
+		return b.preVote(r, d, m)
+	case preVoteReply:
+		return b.preVoteReply(r, d, m)
 	case requestVote:
 		return b.requestVote(r, d, m)
 	case voteReply:

@@ -6,7 +6,7 @@ import (
 )
 
 func init() {
-	dist.Register(requestVote{}, voteReply{}, appendEntries{}, appendReply{},
+	dist.Register(preVote{}, preVoteReply{}, requestVote{}, voteReply{}, appendEntries{}, appendReply{},
 		command{}, applied{}, redirect{}, deposed{}, rejected{},
 		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{},
 		installSnapshot{})
@@ -16,6 +16,14 @@ func init() {
 // messages: a reply is a message too. Members are named by who they are,
 // as Config has it, and found on the node of that PID.
 type (
+	// preVote asks a member whether it would vote for Candidate to lead
+	// Term, which changes nothing of the member: see preStand. The reply
+	// has the Term asked about if granted, else that of the member. Of
+	// types of their own, without the methods of termed, neither moves the
+	// member that gets it to a later term.
+	preVote      requestVote
+	preVoteReply voteReply
+
 	// requestVote asks for the vote of a member, for Candidate to lead Term.
 	requestVote struct {
 		Term      uint64

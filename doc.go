@@ -25,6 +25,12 @@
 // hears of them again. Two members may still lead at once for that short
 // while; what a leader does outside the group should carry its term.
 //
+// The other way round, a leader that the majority hears from is not
+// deposed for nothing: before standing, a member asks whether the others
+// would vote for it, Raft's Pre-Vote, and they would not while they hear
+// from a leader. A member cut off and back, or cut off from the leader
+// only, leaves it in place.
+//
 // # Members
 //
 // Who the members are is in the log, a [Config] of voters and learners:

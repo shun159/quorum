@@ -199,8 +199,8 @@ func TestStandAsksLearners(t *testing.T) {
 	b, d := member(t)
 	config := Config{Voters: []proc.PID{ida, idb}, Learners: []proc.PID{idc}}
 	d.log, d.config = logOf(Entry{Config: &config}), config
-	_, d, effs := b.HandleEvent(follower, d, genstatem.StateTimeout{})
-	_, _, effs = b.HandleEvent(candidate, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
+	r, d, effs := b.stand(d)
+	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
 	asked := map[string]bool{}
 	for _, e := range effs {
 		if s, ok := e.(actor.Send); ok {
