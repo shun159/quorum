@@ -40,7 +40,10 @@ func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
 	for _, j := range d.joining {
 		effs = append(effs, actor.Reply{To: j.from, Value: deposed{}})
 	}
-	d.pending, d.joining, d.peers = nil, nil, nil
+	for _, rd := range d.reads {
+		effs = append(effs, actor.Reply{To: rd.from, Value: redirect{}}) // to read again
+	}
+	d.pending, d.joining, d.reads, d.peers = nil, nil, nil, nil
 	if l, ok := b.spec.Machine.(Leader[S]); ok {
 		effs = append(effs, l.Surrendered(d.state)...)
 	}
@@ -77,6 +80,7 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d replica[S], p peer) actor.Effect {
 		PrevTerm:  d.log.termAt(prev),
 		Entries:   d.log.from(p.next, maxEntries),
 		Commit:    d.commit,
+		Read:      d.readSeq,
 	})
 }
 
@@ -92,7 +96,7 @@ func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntr
 	r, d.leader = follower, m.Leader
 	effs := []actor.Effect{d.electionTimer(b.spec.ElectionTimeout)}
 	if !d.log.has(m.PrevIndex, m.PrevTerm) {
-		reply := appendReply{Term: d.term, From: d.id, LastIndex: d.log.lastIndex()}
+		reply := appendReply{Term: d.term, From: d.id, LastIndex: d.log.lastIndex(), Read: m.Read}
 		return r, d, append(effs, d.after(b.send(m.Leader, reply))...)
 	}
 	log, changed := d.log.merge(m.PrevIndex, m.Entries)
@@ -104,7 +108,7 @@ func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntr
 	match := m.PrevIndex + uint64(len(m.Entries))
 	d.commit = max(d.commit, min(m.Commit, match))
 	effs = append(effs, b.apply(r, &d)...)
-	reply := appendReply{Term: d.term, From: d.id, Success: true, Match: match}
+	reply := appendReply{Term: d.term, From: d.id, Success: true, Match: match, Read: m.Read}
 	return r, d, append(effs, d.after(b.send(m.Leader, reply))...)
 }
 
@@ -119,14 +123,15 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 		return r, d, nil
 	}
 	d.heard(p)
+	p.read = max(p.read, m.Read)
 	if !m.Success {
 		p.next = max(1, min(p.next-1, m.LastIndex+1))
-		return r, d, actor.Do(b.appendTo(d, *p))
+		return r, d, append(b.serveReads(&d), b.appendTo(d, *p))
 	}
 	p.match = max(p.match, m.Match)
 	p.next = max(p.next, p.match+1)
 	progress := *p
-	effs := b.commit(r, &d)
+	effs := append(b.serveReads(&d), b.commit(r, &d)...)
 	if progress.next <= d.log.lastIndex() {
 		effs = append(effs, b.appendTo(d, progress))
 	}
@@ -196,6 +201,7 @@ func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 	}
 	if r == leader {
 		effs = append(effs, d.joined()...)
+		effs = append(effs, b.serveReads(d)...)
 	}
 	return append(effs, b.takeSnapshot(d)...)
 }

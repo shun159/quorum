@@ -58,8 +58,16 @@
 // missing entries it has no more, as one added to the group, which takes
 // it in place of its machine and of its log up to there.
 //
+// # Reads
+//
+// A Machine that is also a [Reader] answers reads, [Read] and
+// [Client.Read]: the leader answers from its state, without appending
+// anything, once a majority has answered a heartbeat sent after the read
+// came, as Raft's ReadIndex has it. Without counting on clocks, a read
+// costs a round trip to a majority, not a write to their disks.
+//
 // # What there is not yet
 //
 // A snapshot is sent whole, in one message, which suits machines of a
-// moderate size. A read is a command, committed as any other.
+// moderate size.
 package quorum

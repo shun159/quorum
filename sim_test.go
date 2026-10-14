@@ -19,6 +19,9 @@ func (counter) Init() int { return 0 }
 
 func (counter) Apply(sum, n int) (int, int, []actor.Effect) { return sum + n, sum + n, nil }
 
+// Read returns the sum, whatever it is given.
+func (counter) Read(sum, _ int) int { return sum }
+
 // group is a group of counters simulated, and what the test has seen of
 // it, to check that Raft keeps its promises at every step.
 type group struct {

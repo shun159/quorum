@@ -14,8 +14,8 @@ import (
 	"github.com/shun159/molecule/proc"
 )
 
-// client adds 1 to a group of counters every tick, one command at a time,
-// and counts what comes of them.
+// client adds 1 to a group of counters, or reads the count, every tick,
+// in turn, one at a time, and counts what comes of them.
 type client struct {
 	genserver.Default[outcomes]
 	group   string
@@ -27,6 +27,11 @@ type outcomes struct {
 	quorum  Client[int, int]
 	acked   int // applied, the leader said
 	unknown int // applied or not: the leader changed, or did not answer
+	asked   int // commands and reads sent
+
+	reads int   // answered
+	floor int   // the adds acknowledged when the read out was sent
+	wrong []int // reads answered not between floor and the adds sent
 }
 
 type tick struct{}
@@ -55,19 +60,34 @@ func (c client) HandleInfo(o outcomes, msg any) (outcomes, []actor.Effect) {
 	return o, effs
 }
 
-// tick sends the next command, unless one is out.
+// tick sends the next command or read, unless one is out.
 func (c client) tick(o outcomes) (outcomes, []actor.Effect) {
 	effs := actor.Do(nextTick())
 	if o.quorum.Out() > 0 {
 		return o, effs
 	}
 	var ask []actor.Effect
-	o.quorum, ask = o.quorum.Command("add", 1)
+	if o.asked++; o.asked%2 == 0 {
+		o.floor = o.acked
+		o.quorum, ask = o.quorum.Read("read", 0)
+	} else {
+		o.quorum, ask = o.quorum.Command("add", 1)
+	}
 	return o, append(effs, ask...)
 }
 
-// count counts what came of a command.
+// count counts what came of a command or a read. A read must have every
+// add acknowledged before it, and no more than were sent.
 func (c client) count(o outcomes, res Result[int]) outcomes {
+	if res.Tag == "read" {
+		if res.Err == nil {
+			o.reads++
+			if res.Rep < o.floor || res.Rep > o.acked+o.unknown {
+				o.wrong = append(o.wrong, res.Rep)
+			}
+		}
+		return o
+	}
 	if res.Err == nil {
 		o.acked++
 	} else {
@@ -156,8 +176,11 @@ func (g *group) checkCount(seed uint64, o outcomes) {
 	if d.state < o.acked || d.state > o.acked+out {
 		g.t.Fatalf("seed %d: count %d, with %d acknowledged and %d unknown", seed, d.state, o.acked, out)
 	}
-	if o.acked == 0 {
-		g.t.Errorf("seed %d: nothing acknowledged", seed)
+	if o.acked == 0 || o.reads == 0 {
+		g.t.Errorf("seed %d: %d acknowledged, %d read", seed, o.acked, o.reads)
+	}
+	if len(o.wrong) > 0 {
+		g.t.Errorf("seed %d: read %v, of %d acknowledged and %d unknown", seed, o.wrong, o.acked, o.unknown)
 	}
 }
 

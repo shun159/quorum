@@ -7,7 +7,7 @@ import (
 
 func init() {
 	dist.Register(preVote{}, preVoteReply{}, requestVote{}, voteReply{}, appendEntries{}, appendReply{},
-		command{}, applied{}, redirect{}, deposed{}, rejected{},
+		command{}, read{}, applied{}, redirect{}, deposed{}, rejected{},
 		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{},
 		installSnapshot{})
 }
@@ -39,7 +39,8 @@ type (
 	// appendEntries has the member To append Entries after the entry of
 	// PrevTerm at PrevIndex, if it has that one, and tells it what is
 	// committed. Without entries, it is a heartbeat. A member other than
-	// To on its node, a later one, drops it.
+	// To on its node, a later one, drops it. Read is the leader's last
+	// round of confirming reads, which the reply echoes.
 	appendEntries struct {
 		Term      uint64
 		Leader    proc.PID
@@ -48,6 +49,7 @@ type (
 		PrevTerm  uint64
 		Entries   []Entry
 		Commit    uint64
+		Read      uint64
 	}
 	// installSnapshot gives the member To the leader's snapshot, in place
 	// of the entries it misses, which the leader has no more. It is
@@ -66,6 +68,7 @@ type (
 		Success   bool
 		Match     uint64
 		LastIndex uint64
+		Read      uint64
 	}
 )
 
@@ -90,6 +93,7 @@ func (m installSnapshot) to() proc.PID { return m.To }
 // A command from a client, and the replies it may get.
 type (
 	command  struct{ Cmd any }
+	read     struct{ Cmd any }       // answered by the leader, not appended
 	applied  struct{ Rep any }       // applied, with its reply
 	redirect struct{ Leader string } // not appended; the node of the leader, if known
 	deposed  struct{}                // appended, but the leader lost its place: applied or not

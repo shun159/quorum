@@ -46,6 +46,8 @@ type replica[S any] struct {
 	peers   []peer     // the other members, as the leader
 	pending []pending  // commands to reply to, as the leader, by index
 	joining []joining  // members added, to reply to once voters, as the leader
+	reads   []reading  // reads to answer, as the leader
+	readSeq uint64     // its last round of confirming reads, as the leader
 	round   uint64     // of the checks of the quorum, as the leader
 
 	seq    uint64 // of the last write to the storage
@@ -61,6 +63,7 @@ type peer struct {
 	match uint64 // the last index known to match the leader's
 
 	heardIn uint64 // the round of the check the leader last heard from it in
+	read    uint64 // the last round of confirming reads it answered
 }
 
 // pending is a command the leader appended, to reply to once applied.

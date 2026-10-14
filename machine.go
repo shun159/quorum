@@ -13,6 +13,14 @@ type Machine[S, Cmd, Rep any] interface {
 	Apply(s S, cmd Cmd) (S, Rep, []actor.Effect)
 }
 
+// Reader is implemented by a Machine that answers reads: commands that
+// change nothing, which the leader answers from its state, without them
+// going through the log. See Read.
+type Reader[S, Cmd, Rep any] interface {
+	// Read returns the reply to cmd in s.
+	Read(s S, cmd Cmd) Rep
+}
+
 // Leader is implemented by a Machine that acts on becoming the leader of
 // its group, and on ceasing to be.
 type Leader[S any] interface {

@@ -28,6 +28,7 @@ type Client[Cmd, Rep any] struct {
 // earlier one, or a command cancelled.
 type attempt struct {
 	cmd  any
+	read bool // a read, see Read
 	node string
 	seq  uint64
 }
@@ -73,6 +74,12 @@ func NewClient[Cmd, Rep any](group string, nodes []string, timeout time.Duration
 // cancelled.
 func (c Client[Cmd, Rep]) Command(tag any, cmd Cmd) (Client[Cmd, Rep], []actor.Effect) {
 	return c.send(tag, attempt{cmd: cmd, node: c.nodes[0]})
+}
+
+// Read sends cmd to the group under tag, to answer as Read does: its
+// Result comes of a later Handle, as for Command.
+func (c Client[Cmd, Rep]) Read(tag any, cmd Cmd) (Client[Cmd, Rep], []actor.Effect) {
+	return c.send(tag, attempt{cmd: cmd, read: true, node: c.nodes[0]})
 }
 
 // Cancel forgets the command under tag: no Result comes of it. It may
@@ -136,9 +143,13 @@ func (c Client[Cmd, Rep]) current(group string, tag any, seq uint64) (attempt, b
 // send asks the member on a.node to apply a.cmd.
 func (c Client[Cmd, Rep]) send(tag any, a attempt) (Client[Cmd, Rep], []actor.Effect) {
 	c, a = c.track(tag, a)
+	var req any = command{a.cmd}
+	if a.read {
+		req = read{a.cmd}
+	}
 	return c, actor.Do(actor.SendRequest{
 		To:      actor.Remote{Node: a.node, Name: replicaName(c.group)},
-		Req:     command{a.cmd},
+		Req:     req,
 		Tag:     answerTag{c.group, tag, a.seq},
 		Timeout: c.timeout,
 	})

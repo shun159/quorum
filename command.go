@@ -127,6 +127,8 @@ func (b behaviour[S, Cmd, Rep]) call(r role, d replica[S], c genstatem.Call) (ro
 	switch m := c.Req.(type) {
 	case command:
 		return b.command(r, d, c, m)
+	case read:
+		return b.read(r, d, c, m)
 	case identify:
 		return r, d, d.after(c.Reply(identity{ID: d.id, Blank: d.log.lastIndex() == 0}))
 	case found:
