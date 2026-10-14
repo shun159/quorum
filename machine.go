@@ -6,7 +6,10 @@ import (
 	"github.com/shun159/molecule/actor"
 )
 
-// Machine is the state machine a group replicates.
+// Machine is the state machine a group replicates: see the package
+// documentation for what it asks of one. Its state, commands and replies
+// go between nodes and to disk: their types of their own are registered
+// with dist.Register.
 type Machine[S, Cmd, Rep any] interface {
 	// Init returns the state before any command.
 	Init() S
