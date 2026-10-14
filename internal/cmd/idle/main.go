@@ -5,6 +5,7 @@
 // while nothing is asked of the groups.
 //
 //	go run ./internal/cmd/idle -groups 1,10,100,1000
+//	go run ./internal/cmd/idle -groups 1000 -quiet=-1s  # never quiet
 package main
 
 import (
@@ -33,6 +34,9 @@ import (
 
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
 
+// quiet is Spec.Quiet of the groups.
+var quiet time.Duration
+
 // profiling is where the CPU profile goes, if anywhere: of the last
 // number of groups measured.
 var profiling *os.File
@@ -42,6 +46,7 @@ func main() {
 	settle := flag.Duration("settle", 3*time.Second, "how long to wait, once founded, before measuring")
 	window := flag.Duration("window", 5*time.Second, "how long to measure")
 	profile := flag.String("cpuprofile", "", "write a CPU profile of the windows measured to this file")
+	flag.DurationVar(&quiet, "quiet", 0, "Spec.Quiet of the groups: negative, as -1s, they never go quiet")
 	flag.Parse()
 	if *profile != "" {
 		f, err := os.Create(*profile)
@@ -131,7 +136,7 @@ func start(n int) (*cluster, error) {
 		c.mu.Unlock()
 		var children []supervisor.ChildSpec
 		for g := range n {
-			spec := quorum.Spec[int, int, int]{Group: group(g), Machine: counter{&c.elections}}
+			spec := quorum.Spec[int, int, int]{Group: group(g), Machine: counter{&c.elections}, Quiet: quiet}
 			children = append(children, supervisor.ChildSpec{ID: group(g), Start: quorum.Child(spec)})
 		}
 		sup, err := supervisor.Start(context.Background(), node, supervisor.Spec{Strategy: supervisor.OneForOne, Children: children})

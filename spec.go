@@ -31,6 +31,12 @@ type Spec[S, Cmd, Rep any] struct {
 	// SessionTimeout is how long, by the time of the log, a session of a
 	// Client lasts without a command: zero means DefaultSessionTimeout.
 	SessionTimeout time.Duration
+	// Quiet is how long the leader of a group with nothing to do waits
+	// before the group goes quiet: its members stop telling each other
+	// they live, and count on their nodes, which tell each other once for
+	// all the groups, see dist.Config.Silent. Zero means ElectionTimeout;
+	// negative, never.
+	Quiet time.Duration
 	// Dir is the directory of the Storage the member keeps who it is and
 	// its log in, across restarts. Empty, the member keeps them in memory
 	// only: restarted, it is another member, which the group must add.
@@ -55,6 +61,7 @@ func (spec Spec[S, Cmd, Rep]) raft() raft.Spec[S, Cmd, Rep] {
 		Heartbeat:       spec.Heartbeat, // a sixth of ElectionTimeout, if zero
 		SnapshotEvery:   cmp.Or(spec.SnapshotEvery, DefaultSnapshotEvery),
 		SessionTimeout:  cmp.Or(spec.SessionTimeout, DefaultSessionTimeout),
+		Quiet:           spec.Quiet, // ElectionTimeout, if zero
 		Storage:         spec.storage(),
 	}
 }

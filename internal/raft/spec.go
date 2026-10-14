@@ -14,7 +14,8 @@ type Spec[S, Cmd, Rep any] struct {
 	Heartbeat       time.Duration
 	SnapshotEvery   uint64
 	SessionTimeout  time.Duration
-	Storage         Storage // nil keeps all in memory
+	Quiet           time.Duration // negative: never
+	Storage         Storage       // nil keeps all in memory
 }
 
 // DefaultElectionTimeout is Spec.ElectionTimeout when zero.
@@ -42,6 +43,9 @@ func (spec Spec[S, Cmd, Rep]) withDefaults() Spec[S, Cmd, Rep] {
 	}
 	if spec.SessionTimeout == 0 {
 		spec.SessionTimeout = DefaultSessionTimeout
+	}
+	if spec.Quiet == 0 {
+		spec.Quiet = spec.ElectionTimeout
 	}
 	return spec
 }

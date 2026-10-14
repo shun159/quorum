@@ -81,6 +81,7 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d replica[S], p peer) actor.Effect {
 		Entries:   d.log.from(p.next, maxEntries),
 		Commit:    d.commit,
 		Read:      d.readSeq,
+		Quiet:     d.quiet,
 	})
 }
 
@@ -94,11 +95,11 @@ func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntr
 	}
 	// From the leader of the term: a candidate in it has lost.
 	r, d.leader = follower, m.Leader
-	effs := []actor.Effect{d.electionTimer(b.spec.ElectionTimeout)}
 	if !d.log.has(m.PrevIndex, m.PrevTerm) {
 		reply := appendReply{Term: d.term, From: d.id, LastIndex: d.log.lastIndex(), Read: m.Read}
-		return r, d, append(effs, d.after(b.send(m.Leader, reply))...)
+		return r, d, append(b.follow(&d, false), d.after(b.send(m.Leader, reply))...)
 	}
+	var effs []actor.Effect
 	log, changed := d.log.merge(m.PrevIndex, m.Entries)
 	if changed > 0 {
 		d.log = log
@@ -107,6 +108,7 @@ func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntr
 	}
 	match := m.PrevIndex + uint64(len(m.Entries))
 	d.commit = max(d.commit, min(m.Commit, match))
+	effs = append(effs, b.follow(&d, m.Quiet && match == d.log.lastIndex() && d.commit == match)...)
 	effs = append(effs, b.apply(r, &d)...)
 	reply := appendReply{Term: d.term, From: d.id, Success: true, Match: match, Read: m.Read}
 	return r, d, append(effs, d.after(b.send(m.Leader, reply))...)

@@ -52,6 +52,10 @@ type replica[S any] struct {
 	readSeq uint64     // its last round of confirming reads, as the leader
 	round   uint64     // of the checks of the quorum, as the leader
 
+	quiet   bool     // the group is quiet, see Quiet
+	idle    int      // the beats in a row with nothing to do, as the leader
+	unheard []string // the nodes silent or down, as dist tells
+
 	seq    uint64 // of the last write to the storage
 	saved  uint64 // seq of the last write known durable
 	stable uint64 // the last index of the log known durable
@@ -132,11 +136,12 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 	}
 	d.logChanged()
 	d.stable = d.log.lastIndex()
+	effs := actor.Do(actor.MonitorNodes{On: true})
 	if !d.id.IsZero() {
-		return follower, d, nil, nil
+		return follower, d, effs, nil
 	}
 	d.id = self
-	return follower, d, b.saveState(&d), nil
+	return follower, d, append(effs, b.saveState(&d)...), nil
 }
 
 // seed seeds the election timeouts of the member of group in process
@@ -182,6 +187,12 @@ func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.E
 		if tag, err, ok := b.isDurable(e.Msg); ok {
 			return b.durable(r, d, tag, err)
 		}
+		if node, lost, ok := nodeLost(e.Msg); ok {
+			return b.nodeEvent(r, d, node, lost)
+		}
+		if m, ok := e.Msg.(actor.Down); ok && m.Tag == (watchLeader{}) {
+			return b.leaderDown(r, d, m)
+		}
 		return b.message(r, d, e.Msg)
 	}
 	return r, d, nil
@@ -192,6 +203,7 @@ func (b behaviour[S, Cmd, Rep]) enter(r, old role, d replica[S]) (role, replica[
 	var effs []actor.Effect
 	if old == leader && r != leader {
 		effs = b.surrender(&d)
+		d.quiet = false
 	}
 	switch r {
 	case follower:
@@ -208,7 +220,8 @@ func (b behaviour[S, Cmd, Rep]) enter(r, old role, d replica[S]) (role, replica[
 func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S], []actor.Effect) {
 	switch {
 	case r == leader:
-		return r, d, b.heartbeat(d)
+		d, effs := b.beat(d)
+		return r, d, effs
 	case !d.config.isVoter(d.id):
 		return r, d, actor.Do(d.electionTimer(b.spec.ElectionTimeout))
 	}
@@ -224,9 +237,12 @@ func (b behaviour[S, Cmd, Rep]) message(r role, d replica[S], msg any) (role, re
 	}
 	var saving []actor.Effect
 	if m, ok := msg.(termed); ok && m.term() > d.term {
+		if r == follower && d.quiet {
+			saving = d.unhush(d.electionTimer(b.spec.ElectionTimeout))
+		}
 		r = follower
 		d.newTerm(m.term())
-		saving = b.saveState(&d)
+		saving = append(saving, b.saveState(&d)...)
 	}
 	r, d, effs := b.handle(r, d, msg)
 	return r, d, append(saving, effs...)
@@ -265,5 +281,11 @@ func (d *replica[S]) others() []proc.PID {
 
 // send sends msg to the member id.
 func (b behaviour[S, Cmd, Rep]) send(id proc.PID, msg any) actor.Effect {
-	return actor.Send{To: actor.Remote{Node: id.Node(), Name: replicaName(b.spec.Group)}, Msg: msg}
+	return actor.Send{To: b.at(id), Msg: msg}
+}
+
+// at is where the member id runs: on its node, under the name of the
+// group, whatever process it is now.
+func (b behaviour[S, Cmd, Rep]) at(id proc.PID) actor.Remote {
+	return actor.Remote{Node: id.Node(), Name: replicaName(b.spec.Group)}
 }

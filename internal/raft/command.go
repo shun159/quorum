@@ -172,6 +172,19 @@ func pause(ctx context.Context, d time.Duration) error {
 // call handles a call from outside the group: a command from a client, or
 // the founding of the group.
 func (b behaviour[S, Cmd, Rep]) call(r role, d replica[S], c genstatem.Call) (role, replica[S], []actor.Effect) {
+	switch c.Req.(type) {
+	case command, openSession, read, addMember, removeMember:
+		if r == leader {
+			waking := b.wake(&d)
+			r, d, effs := b.serve(r, d, c)
+			return r, d, append(waking, effs...)
+		}
+	}
+	return b.serve(r, d, c)
+}
+
+// serve handles the call c.
+func (b behaviour[S, Cmd, Rep]) serve(r role, d replica[S], c genstatem.Call) (role, replica[S], []actor.Effect) {
 	switch m := c.Req.(type) {
 	case whoLeads:
 		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))

@@ -40,7 +40,8 @@ type (
 	// PrevTerm at PrevIndex, if it has that one, and tells it what is
 	// committed. Without entries, it is a heartbeat. A member other than
 	// To on its node, a later one, drops it. Read is the leader's last
-	// round of confirming reads, which the reply echoes.
+	// round of confirming reads, which the reply echoes. Quiet tells that
+	// the leader goes quiet, see Quiet.
 	appendEntries struct {
 		Term      uint64
 		Leader    proc.PID
@@ -50,6 +51,7 @@ type (
 		Entries   []Entry
 		Commit    uint64
 		Read      uint64
+		Quiet     bool
 	}
 	// installSnapshot gives the member To the leader's snapshot, in place
 	// of the entries it misses, which the leader has no more. It is

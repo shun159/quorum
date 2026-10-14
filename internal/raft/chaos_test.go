@@ -15,7 +15,8 @@ import (
 )
 
 // client adds 1 to a group of counters, or reads the count, every tick,
-// in turn, one at a time, and counts what comes of them.
+// in turn, one at a time, and counts what comes of them. It works for a
+// while, then rests for as long, for the group to go quiet amid faults.
 type client struct {
 	genserver.Default[outcomes]
 	group   string
@@ -28,6 +29,7 @@ type outcomes struct {
 	acked   int // applied, the leader said
 	unknown int // ended with an error: applied or not
 	asked   int // commands and reads sent
+	ticks   int
 
 	reads int   // answered
 	floor int   // the adds acknowledged when the read out was sent
@@ -36,7 +38,10 @@ type outcomes struct {
 
 type tick struct{}
 
-const tickEvery = 50 * time.Millisecond
+const (
+	tickEvery = 50 * time.Millisecond
+	workTicks = 20 // then rests as many
+)
 
 func (c client) Init(proc.PID) (outcomes, []actor.Effect, error) {
 	o := outcomes{quorum: NewClient[int, int](c.group, c.members, time.Second)}
@@ -63,7 +68,7 @@ func (c client) HandleInfo(o outcomes, msg any) (outcomes, []actor.Effect) {
 // tick sends the next command or read, unless one is out.
 func (c client) tick(o outcomes) (outcomes, []actor.Effect) {
 	effs := actor.Do(nextTick())
-	if o.quorum.Out() > 0 {
+	if o.ticks++; o.quorum.Out() > 0 || (o.ticks/workTicks)%2 == 1 {
 		return o, effs
 	}
 	var ask []actor.Effect
@@ -116,9 +121,9 @@ func FuzzChaos(f *testing.F) {
 
 // chaos runs a group under partitions, crashes, disks replaced and lost
 // messages, of three members or five as the seed has it, checking it at
-// every step. Once healed and quiet, the members all hold the same count,
-// which has every command acknowledged, and no more than were sent; and
-// every node's member is a voter.
+// every step. Once healed and idle, the members all hold the same count,
+// which has every command acknowledged, and no more than were sent;
+// every node's member is a voter; and the group is quiet.
 func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 	t.Helper()
 	// Three are the most fragile: one member losing a write may lose what
@@ -144,6 +149,19 @@ func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 
 	g.checkCount(seed, o)
 	g.checkSwapped(seed)
+	if !g.quietAll() {
+		g.dump()
+		g.t.Fatalf("seed %d: settled, not quiet", seed)
+	}
+}
+
+// dump logs what each member is at.
+func (g *group) dump() {
+	for _, m := range g.members {
+		r, d, ok := g.member(m)
+		g.t.Logf("%s: %v, running %v, id %v, term %d, leader %v, quiet %v, commit %d applied %d of %d, peers %+v, config %+v",
+			m, r, ok, d.id, d.term, d.leader, d.quiet, d.commit, d.applied, d.log.lastIndex(), d.peers, d.config)
+	}
 }
 
 // sameMembers reports whether a and b hold the same members, in any order.
@@ -170,6 +188,7 @@ func (g *group) checkCount(seed uint64, o outcomes) {
 	_, d, _ := g.member(g.members[0])
 	for _, m := range g.members {
 		if _, dm, _ := g.member(m); dm.state != d.state {
+			g.dump()
 			g.t.Fatalf("seed %d: %s holds %d, %s %d", seed, m, dm.state, g.members[0], d.state)
 		}
 	}

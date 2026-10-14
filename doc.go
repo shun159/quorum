@@ -22,6 +22,13 @@
 // round, a leader that the majority hears from stays: a member cut off and
 // back, or cut off from the leader only, does not depose it.
 //
+// A group with nothing to do goes quiet, after Spec.Quiet: its members
+// stop telling each other they live, and count on their nodes instead,
+// which tell each other once for all the groups, see dist.Config.Silent.
+// Idle, a group costs nothing, however many a node has; its leader lost,
+// the others elect another once its node falls silent, or it dies. A
+// command or a read wakes it.
+//
 // # Members
 //
 // Who the members are, voters and learners, is agreed on as commands are:

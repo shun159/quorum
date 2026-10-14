@@ -31,6 +31,13 @@ func (b behaviour[S, Cmd, Rep]) preStand(d replica[S]) (role, replica[S], []acto
 // behind its own, and no leader heard from. It changes nothing, so it need
 // not wait for a write.
 func (b behaviour[S, Cmd, Rep]) preVote(r role, d replica[S], m preVote) (role, replica[S], []actor.Effect) {
+	var effs []actor.Effect
+	switch {
+	case r == leader:
+		effs = b.wake(&d) // the member missed it going quiet
+	case r == follower && d.quiet && m.Candidate == d.leader:
+		effs = d.unhush(d.electionTimer(b.spec.ElectionTimeout)) // its leader leads no more
+	}
 	grant := m.Term > d.term &&
 		!d.hearsLeader(r) &&
 		d.log.notAheadOf(m.LastIndex, m.LastTerm)
@@ -38,7 +45,7 @@ func (b behaviour[S, Cmd, Rep]) preVote(r role, d replica[S], m preVote) (role, 
 	if grant {
 		reply.Term = m.Term
 	}
-	return r, d, actor.Do(b.send(m.Candidate, reply))
+	return r, d, append(effs, b.send(m.Candidate, reply))
 }
 
 // hearsLeader reports whether the member hears from a leader: it leads,
