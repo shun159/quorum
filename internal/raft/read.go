@@ -51,7 +51,7 @@ func (b behaviour[S, Cmd, Rep]) read(r role, d replica[S], c genstatem.Call, m r
 
 // unreadable tells why the group cannot read cmd, if it cannot.
 func (b behaviour[S, Cmd, Rep]) unreadable(cmd any) string {
-	if _, ok := b.spec.Machine.(Reader[S, Cmd, Rep]); !ok {
+	if !b.reads() {
 		return fmt.Sprintf("quorum: the machine of group %s does not read", b.spec.Group)
 	}
 	if _, ok := cmd.(Cmd); !ok {
@@ -66,7 +66,6 @@ func (b behaviour[S, Cmd, Rep]) serveReads(d *replica[S]) []actor.Effect {
 	if len(d.reads) == 0 {
 		return nil
 	}
-	reader := b.spec.Machine.(Reader[S, Cmd, Rep])
 	var effs []actor.Effect
 	var waiting []reading
 	for _, rd := range d.reads {
@@ -74,7 +73,7 @@ func (b behaviour[S, Cmd, Rep]) serveReads(d *replica[S]) []actor.Effect {
 			waiting = append(waiting, rd)
 			continue
 		}
-		rep := reader.Read(d.state, rd.cmd.(Cmd))
+		rep := b.readMachine(d, rd.cmd.(Cmd))
 		effs = append(effs, actor.Reply{To: rd.from, Value: applied{Rep: rep}})
 	}
 	d.reads = waiting

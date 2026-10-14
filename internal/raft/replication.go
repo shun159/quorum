@@ -231,7 +231,7 @@ func (b behaviour[S, Cmd, Rep]) applyEntry(d *replica[S], index uint64, e Entry)
 
 // applyCmd applies cmd to the machine.
 func (b behaviour[S, Cmd, Rep]) applyCmd(d *replica[S], cmd any) (applied, []actor.Effect) {
-	state, rep, effs := b.spec.Machine.Apply(d.state, cmd.(Cmd))
+	state, rep, effs := b.applyMachine(d.state, cmd.(Cmd), d.sessions.Time)
 	d.state = state
 	return applied{rep}, effs
 }

@@ -1,6 +1,10 @@
 package quorum
 
-import "github.com/shun159/molecule/actor"
+import (
+	"time"
+
+	"github.com/shun159/molecule/actor"
+)
 
 // Machine is the state machine a group replicates.
 type Machine[S, Cmd, Rep any] interface {
@@ -15,10 +19,27 @@ type Machine[S, Cmd, Rep any] interface {
 
 // Reader is implemented by a Machine that answers reads: commands that
 // change nothing, which the leader answers from its state, without them
-// going through the log. See Read.
+// going through the log. See Read, and TimedReader.
 type Reader[S, Cmd, Rep any] interface {
 	// Read returns the reply to cmd in s.
 	Read(s S, cmd Cmd) Rep
+}
+
+// Timed is implemented by a Machine whose commands depend on time, as
+// leases and TTLs do: ApplyAt is called in place of Apply, with the time
+// of the command. That time is the same on every member: the clock of the
+// leader as it took the command, which only goes forward, from one leader
+// to the next. Nothing happens at a time by itself: a lease expired is
+// seen so by the next command, or read.
+type Timed[S, Cmd, Rep any] interface {
+	ApplyAt(s S, cmd Cmd, at time.Time) (S, Rep, []actor.Effect)
+}
+
+// TimedReader is implemented by a Machine whose reads depend on time:
+// ReadAt is called in place of Read, at the time of the leader's clock,
+// never before the time of the last command applied.
+type TimedReader[S, Cmd, Rep any] interface {
+	ReadAt(s S, cmd Cmd, at time.Time) Rep
 }
 
 // Leader is implemented by a Machine that acts on becoming the leader of
