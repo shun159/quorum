@@ -234,6 +234,7 @@ func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S],
 		d, effs := b.beat(d)
 		return r, d, effs
 	case !d.config.isVoter(d.id):
+		d.leader = proc.PID{} // heard from none: it would vote, for those counting it a voter
 		return r, d, actor.Do(d.electionTimer(b.spec.ElectionTimeout))
 	}
 	return b.preStand(d)
