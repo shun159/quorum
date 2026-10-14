@@ -1,9 +1,9 @@
 package quorum
 
 import (
-	"errors"
-	"fmt"
 	"time"
+
+	"github.com/shun159/quorum/internal/raft"
 )
 
 // Spec says what the member of a group on a node is: the group, the
@@ -33,48 +33,27 @@ type Spec[S, Cmd, Rep any] struct {
 	// across restarts, each member its own. Without one, the member keeps
 	// them in memory only: restarted, it is another member, which the
 	// group must add.
-	Storage Storage
+	Storage raft.Storage
 }
 
 // DefaultElectionTimeout is Spec.ElectionTimeout when zero.
-const DefaultElectionTimeout = 300 * time.Millisecond
+const DefaultElectionTimeout = raft.DefaultElectionTimeout
 
 // DefaultSnapshotEvery is Spec.SnapshotEvery when zero.
-const DefaultSnapshotEvery = 10000
+const DefaultSnapshotEvery = raft.DefaultSnapshotEvery
 
 // DefaultSessionTimeout is Spec.SessionTimeout when zero.
-const DefaultSessionTimeout = time.Minute
+const DefaultSessionTimeout = raft.DefaultSessionTimeout
 
-// replicaName is the name of the member of group on each node.
-func replicaName(group string) string { return "quorum/" + group }
-
-// withDefaults returns spec with its zero durations set.
-func (spec Spec[S, Cmd, Rep]) withDefaults() Spec[S, Cmd, Rep] {
-	if spec.ElectionTimeout == 0 {
-		spec.ElectionTimeout = DefaultElectionTimeout
+// raft returns spec as the member takes it.
+func (spec Spec[S, Cmd, Rep]) raft() raft.Spec[S, Cmd, Rep] {
+	return raft.Spec[S, Cmd, Rep]{
+		Group:           spec.Group,
+		Machine:         spec.Machine,
+		ElectionTimeout: spec.ElectionTimeout,
+		Heartbeat:       spec.Heartbeat,
+		SnapshotEvery:   spec.SnapshotEvery,
+		SessionTimeout:  spec.SessionTimeout,
+		Storage:         spec.Storage,
 	}
-	if spec.Heartbeat == 0 {
-		spec.Heartbeat = spec.ElectionTimeout / 6
-	}
-	if spec.SnapshotEvery == 0 {
-		spec.SnapshotEvery = DefaultSnapshotEvery
-	}
-	if spec.SessionTimeout == 0 {
-		spec.SessionTimeout = DefaultSessionTimeout
-	}
-	return spec
-}
-
-// validate reports what is wrong with spec, once with its defaults.
-func (spec Spec[S, Cmd, Rep]) validate() error {
-	switch {
-	case spec.Group == "":
-		return errors.New("quorum: a group needs a name")
-	case spec.Machine == nil:
-		return fmt.Errorf("quorum: group %s has no machine", spec.Group)
-	case spec.Heartbeat >= spec.ElectionTimeout:
-		return fmt.Errorf("quorum: group %s beats every %v, not under its election timeout %v",
-			spec.Group, spec.Heartbeat, spec.ElectionTimeout)
-	}
-	return nil
 }

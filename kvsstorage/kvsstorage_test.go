@@ -10,7 +10,7 @@ import (
 	"github.com/shun159/molecule/behaviours/supervisor"
 	"github.com/shun159/molecule/gensim"
 	"github.com/shun159/molecule/proc"
-	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/raft"
 )
 
 // writer performs its writes when called, as a member does, and replies
@@ -18,7 +18,7 @@ import (
 // is fingerprinted, the table within it too, while kvs syncs it.
 type writer struct {
 	genserver.Default[*genserver.From[error]]
-	st   quorum.Storage
+	st   raft.Storage
 	effs []actor.Effect
 }
 
@@ -36,7 +36,7 @@ func (w writer) HandleInfo(waiting *genserver.From[error], msg any) (*genserver.
 }
 
 // save performs effs on st, in a simulation, and waits for them.
-func save(t *testing.T, st quorum.Storage, effs ...actor.Effect) {
+func save(t *testing.T, st raft.Storage, effs ...actor.Effect) {
 	t.Helper()
 	s := gensim.New(1)
 	pid, err := gensim.Spawn(s, genserver.Gen(writer{st: st, effs: effs}), nil)
@@ -51,10 +51,10 @@ func save(t *testing.T, st quorum.Storage, effs ...actor.Effect) {
 // voted is the member voted for, a PID.
 var voted = proc.NewNode("a").NewPID()
 
-func entries(terms ...uint64) []quorum.Entry {
-	var es []quorum.Entry
+func entries(terms ...uint64) []raft.Entry {
+	var es []raft.Entry
 	for i, term := range terms {
-		es = append(es, quorum.Entry{Term: term, Cmd: i})
+		es = append(es, raft.Entry{Term: term, Cmd: i})
 	}
 	return es
 }
@@ -68,10 +68,10 @@ func TestStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	g, gx := For(table, "g"), For(table, "gx")
-	save(t, g, g.SaveState(quorum.State{Term: 3, VotedFor: voted}, 1), g.Append(1, entries(1, 1, 2, 2), 2))
+	save(t, g, g.SaveState(raft.State{Term: 3, VotedFor: voted}, 1), g.Append(1, entries(1, 1, 2, 2), 2))
 	save(t, gx, gx.Append(1, entries(7), 3))
 	// A leader of term 3 replaces the entries from index 3 on.
-	save(t, g, g.Append(3, []quorum.Entry{{Term: 3, Cmd: "new"}}, 4))
+	save(t, g, g.Append(3, []raft.Entry{{Term: 3, Cmd: "new"}}, 4))
 	if err := table.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -85,9 +85,9 @@ func TestStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := quorum.Saved{
-		State: quorum.State{Term: 3, VotedFor: voted},
-		Log:   append(entries(1, 1), quorum.Entry{Term: 3, Cmd: "new"}),
+	want := raft.Saved{
+		State: raft.State{Term: 3, VotedFor: voted},
+		Log:   append(entries(1, 1), raft.Entry{Term: 3, Cmd: "new"}),
 	}
 	if saved.State != want.State || !slices.Equal(saved.Log, want.Log) {
 		t.Errorf("g loaded %+v, want %+v", saved, want)
@@ -95,7 +95,7 @@ func TestStorage(t *testing.T) {
 	if saved, _ := For(table, "gx").Load(); !slices.Equal(saved.Log, entries(7)) {
 		t.Errorf("gx loaded %+v", saved)
 	}
-	if saved, _ := For(table, "none").Load(); saved.State != (quorum.State{}) || len(saved.Log) != 0 {
+	if saved, _ := For(table, "none").Load(); saved.State != (raft.State{}) || len(saved.Log) != 0 {
 		t.Errorf("a group never written loaded %+v", saved)
 	}
 }
@@ -108,7 +108,7 @@ func TestSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := For(table, "g")
-	snap := quorum.Snapshot{Index: 2, Term: 1, Config: quorum.Config{Voters: []proc.PID{voted}}, State: 42}
+	snap := raft.Snapshot{Index: 2, Term: 1, Config: raft.Config{Voters: []proc.PID{voted}}, State: 42}
 	save(t, g, g.Append(1, entries(1, 1, 1, 2), 1), g.SaveSnapshot(snap, 2))
 	if err := table.Close(); err != nil {
 		t.Fatal(err)

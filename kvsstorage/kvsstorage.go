@@ -30,7 +30,7 @@ import (
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/gen"
 	"github.com/shun159/molecule/kvs"
-	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/raft"
 )
 
 // Kind is what a record of a member is.
@@ -56,9 +56,9 @@ func (k Key) Compare(o Key) int {
 
 // Record is a record of a member, the field of its kind set.
 type Record struct {
-	State    quorum.State
-	Snapshot quorum.Snapshot
-	Entry    quorum.Entry
+	State    raft.State
+	Snapshot raft.Snapshot
+	Entry    raft.Entry
 }
 
 // Table is a table of members.
@@ -78,13 +78,13 @@ func Child(dir string) gen.Child {
 }
 
 // For returns the storage of the member of group in t.
-func For(t *Table, group string) quorum.Storage {
+func For(t *Table, group string) raft.Storage {
 	return storage{t: t, group: group}
 }
 
 // In returns the storage of the member of group in the table kept in dir,
 // open by Child.
-func In(dir, group string) quorum.Storage {
+func In(dir, group string) raft.Storage {
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs // for kvs.Opened to find it without the working directory
 	}
@@ -115,12 +115,12 @@ func (s storage) end() Key { return Key{Group: s.group + "\x00"} }
 
 // Load reads the records of the member back. Entries up to the snapshot,
 // left by a crash amid deleting them, are skipped.
-func (s storage) Load() (quorum.Saved, error) {
+func (s storage) Load() (raft.Saved, error) {
 	t, err := s.table()
 	if err != nil {
-		return quorum.Saved{}, err
+		return raft.Saved{}, err
 	}
-	var saved quorum.Saved
+	var saved raft.Saved
 	for k, r := range t.Range(s.key(KindState, 0), s.end()) {
 		switch {
 		case k.Kind == KindState:
@@ -131,14 +131,14 @@ func (s storage) Load() (quorum.Saved, error) {
 		case k.Index == saved.Snapshot.Index+uint64(len(saved.Log))+1:
 			saved.Log = append(saved.Log, r.Entry)
 		default:
-			return quorum.Saved{}, fmt.Errorf("kvsstorage: group %s has entry %d after %d",
+			return raft.Saved{}, fmt.Errorf("kvsstorage: group %s has entry %d after %d",
 				s.group, k.Index, saved.Snapshot.Index+uint64(len(saved.Log)))
 		}
 	}
 	return saved, nil
 }
 
-func (s storage) SaveState(st quorum.State, tag any) actor.Effect {
+func (s storage) SaveState(st raft.State, tag any) actor.Effect {
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
 		return []write{put(t, s.key(KindState, 0), Record{State: st})}
 	}}
@@ -154,7 +154,7 @@ func (s storage) Durable(msg any) (any, error, bool) {
 // last first, then puts the new ones, in order: should the node crash amid
 // them, the log left on disk is the start of the old one, or of the new
 // one, never old entries after new ones.
-func (s storage) Append(index uint64, entries []quorum.Entry, tag any) actor.Effect {
+func (s storage) Append(index uint64, entries []raft.Entry, tag any) actor.Effect {
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
 		var writes []write
 		for _, k := range slices.Backward(s.keys(t, index)) {
@@ -169,7 +169,7 @@ func (s storage) Append(index uint64, entries []quorum.Entry, tag any) actor.Eff
 
 // SaveSnapshot returns the effect putting snap, then deleting the entries
 // up to its index, which Load skips meanwhile.
-func (s storage) SaveSnapshot(snap quorum.Snapshot, tag any) actor.Effect {
+func (s storage) SaveSnapshot(snap raft.Snapshot, tag any) actor.Effect {
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
 		writes := []write{put(t, s.key(KindSnapshot, 0), Record{Snapshot: snap})}
 		for _, k := range s.keys(t, 1) {

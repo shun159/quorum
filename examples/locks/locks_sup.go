@@ -16,7 +16,7 @@ func locksSup(dir string) supervisor.Spec {
 		Intensity: 5,
 		Children: []supervisor.ChildSpec{
 			{ID: "locks_storage", Start: kvsstorage.Child(dir)},
-			{ID: "locks_member", Start: quorum.Child(spec(kvsstorage.In(dir, group)))},
+			{ID: "locks_member", Start: quorum.Child(spec(dir))},
 		},
 	}
 }
