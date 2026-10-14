@@ -38,8 +38,30 @@ func TestFoundOnce(t *testing.T) {
 	if _, err := g.command(1); err != nil {
 		t.Fatal(err)
 	}
-	if v, err := g.s.Call(g.at("a"), found{d.config}); err != nil || v == (applied{}) {
-		t.Errorf("founding a group with commands: %#v, %v", v, err)
+	if v, err := g.s.Call(g.at("a"), found{d.config}); err != nil || v != (applied{}) {
+		t.Errorf("founding again alike, after a command: %#v, %v", v, err)
+	}
+}
+
+// Found reaching a member last, after the others elected a leader, which
+// sent it the founding, succeeds all the same.
+func TestFoundLate(t *testing.T) {
+	g := unfounded(t, 1, three, func(string) Machine[int, int, int] { return counter{} })
+	var config Config
+	for _, m := range three {
+		config.Voters = append(config.Voters, g.identify(m))
+	}
+	for _, m := range three[:2] {
+		if v, err := g.s.Call(g.at(m), found{config}); err != nil || v != (applied{}) {
+			t.Fatalf("founding on %s: %v, %v", m, v, err)
+		}
+	}
+	g.run(2 * time.Second)
+	if _, d, _ := g.member("c"); d.log.lastIndex() < 2 {
+		t.Fatalf("c holds %d entries, not those of the leader", d.log.lastIndex())
+	}
+	if v, err := g.s.Call(g.at("c"), found{config}); err != nil || v != (applied{}) {
+		t.Errorf("founding on c, last: %#v, %v", v, err)
 	}
 }
 

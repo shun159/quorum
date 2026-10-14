@@ -34,7 +34,9 @@ func Found(ctx context.Context, caller actor.Caller, group string, nodes []strin
 
 // found founds the group with config, which the member is in: config is
 // the first entry of its log, of term 0. A member with another log
-// refuses; one founded with config already says so again.
+// refuses; one founded with config already says so again, whatever came
+// after: Found may reach it after the others elected a leader, which sent
+// it the founding.
 func (b behaviour[S, Cmd, Rep]) found(r role, d replica[S], c genstatem.Call, m found) (role, replica[S], []actor.Effect) {
 	switch {
 	case d.foundedWith(m.Config):
@@ -51,10 +53,10 @@ func (b behaviour[S, Cmd, Rep]) found(r role, d replica[S], c genstatem.Call, m 
 	return r, d, append(effs, d.after(c.Reply(applied{}))...)
 }
 
-// foundedWith reports whether the log is only the founding of the group
-// with config.
+// foundedWith reports whether the group was founded with config: the
+// first entry of the log, while it has it.
 func (d *replica[S]) foundedWith(config Config) bool {
-	if d.log.lastIndex() != 1 || d.log.at(1).Config == nil {
+	if d.log.start > 0 || d.log.lastIndex() == 0 || d.log.at(1).Config == nil {
 		return false
 	}
 	return sameConfig(*d.log.at(1).Config, config)
