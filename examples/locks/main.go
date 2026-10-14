@@ -6,7 +6,7 @@
 //	├── locks_group (one_for_all)
 //	│   ├── locks_storage  the storage of the node, in -dir
 //	│   └── locks_member   the member of the group, its log in the storage
-//	└── locks_holder       shows the locks the node holds, and works with them
+//	└── locks_holder       shows the locks the node takes and frees
 //
 // Each file holds one "module": locks_app.go is the application,
 // locks_sup.go the supervisors, locks_machine.go the state machine and its
@@ -24,11 +24,10 @@
 //	lock printer
 //	*** this node holds the lock "printer", token 1
 //	ok, token 1
-//	*** working with the lock "printer", token 1
 //
 // The leader tells the node that took the lock, an effect of the machine,
-// which only the leader performs; the holder of the node works with it
-// every few seconds, until it is unlocked. On b:
+// which only the leader performs, and tells it again when it frees it. On
+// b:
 //
 //	lock printer
 //	held by a@localhost, token 1
