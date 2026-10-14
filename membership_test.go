@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/genstatem"
 	"github.com/shun159/molecule/proc"
 )
@@ -183,5 +184,24 @@ func TestOneChangeAtATime(t *testing.T) {
 	call := genstatem.Call{Req: removeMember{"c"}}
 	if _, _, effs := b.HandleEvent(leader, d, call); len(effs) != 1 || effs[0] != call.Reply(busy{}) {
 		t.Errorf("a second change: %v", effs)
+	}
+}
+
+// A candidate asks the learners for their votes too: one may be a voter by
+// a later configuration, which the candidate does not have yet.
+func TestStandAsksLearners(t *testing.T) {
+	b, d := member(t)
+	config := Config{Voters: []proc.PID{ida, idb}, Learners: []proc.PID{idc}}
+	d.log, d.config = logOf(Entry{Config: &config}), config
+	_, d, effs := b.HandleEvent(follower, d, genstatem.StateTimeout{})
+	_, _, effs = b.HandleEvent(candidate, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
+	asked := map[string]bool{}
+	for _, e := range effs {
+		if s, ok := e.(actor.Send); ok {
+			asked[s.To.(actor.Remote).Node] = true
+		}
+	}
+	if !asked["a"] || !asked["c"] {
+		t.Errorf("asked %v, want a and c", asked)
 	}
 }

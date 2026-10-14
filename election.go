@@ -18,7 +18,14 @@ func (d *replica[S]) electionTimer(base time.Duration) actor.Effect {
 }
 
 // stand starts an election for the next term: the voter votes for itself,
-// and asks the other voters for their votes, once its own is saved.
+// and asks the others for their votes, once its own is saved.
+//
+// It asks the learners too. One may be a voter by a later configuration
+// than the candidate has: it decides by its own. Not asked, it would not
+// learn the term, only refusing a candidate after the term had moved on,
+// then waiting a whole timeout from there; the candidate, its timer
+// started earlier, would stand again first, and again, never giving it a
+// vote.
 func (b behaviour[S, Cmd, Rep]) stand(d replica[S]) (role, replica[S], []actor.Effect) {
 	d.term++
 	d.votedFor, d.leader = d.id, proc.PID{}
@@ -30,10 +37,8 @@ func (b behaviour[S, Cmd, Rep]) stand(d replica[S]) (role, replica[S], []actor.E
 	effs = append(effs, d.electionTimer(b.spec.ElectionTimeout))
 	ask := requestVote{Term: d.term, Candidate: d.id, LastIndex: d.log.lastIndex(), LastTerm: d.log.lastTerm()}
 	var asks []actor.Effect
-	for _, v := range d.config.Voters {
-		if v != d.id {
-			asks = append(asks, b.send(v, ask))
-		}
+	for _, id := range d.others() {
+		asks = append(asks, b.send(id, ask))
 	}
 	return candidate, d, append(effs, d.after(asks...)...)
 }
