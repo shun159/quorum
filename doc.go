@@ -29,6 +29,31 @@
 // the others elect another once its node falls silent, or it dies. A
 // command or a read wakes it.
 //
+// # Machines
+//
+// Any state machine is replicated alike: a map, a lock service, a store
+// of configuration, a counter handing out numbers, a queue, a job one node
+// runs at a time. A Machine is what a group is for, as a behaviour is
+// what a process is for: quorum agrees on the commands, the Machine
+// decides what they do. It asks of the Machine:
+//
+//   - Apply depends on the state and the command only, not on the clock,
+//     randomness or the world: every member must come to the same state.
+//     A Machine needing the time is [Timed], and is given the leader's.
+//   - Effects act on the world, performed by the leader as it applies the
+//     command, and are not replicated: about a change of leader, those of
+//     a command may be performed by none, or by two. What the leader does
+//     outside the group carries its term, for the outside to refuse an
+//     older one.
+//   - The state, the commands and the replies go between nodes and to
+//     disk: their types of their own are registered, with dist.Register,
+//     on every node, and only their exported fields are kept.
+//   - The state is held whole in memory, and sent whole to a member that
+//     needs it: a Machine of a moderate size, not a store of much data.
+//   - A group applies its commands one at a time, through its leader: a
+//     load too much for one is spread over groups, as by a hash of a key,
+//     which agree on nothing together.
+//
 // # Members
 //
 // Who the members are, voters and learners, is agreed on as commands are:
