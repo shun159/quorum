@@ -39,6 +39,16 @@
 // for the one before it. [TransferLeader] moves the lead to another voter,
 // as before taking a node down.
 //
+// # Groups
+//
+// A node may have the members of many groups, each its own Spec, started
+// with the node by Child, or at runtime: [Groups], on each node, starts
+// the members of the groups [CreateGroup] creates, and stops those
+// [DeleteGroup] deletes, deleting what they saved; it keeps the groups
+// started on its node, and starts them again with it. The groups of a
+// node share its storage, its connections to the others, and, idle, cost
+// nothing.
+//
 // # Storage
 //
 // A member keeps who it is and what it agreed on in the [Storage] of its

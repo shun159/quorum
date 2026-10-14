@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shun159/molecule/actor"
+	"github.com/shun159/molecule/behaviours/gen"
 	"github.com/shun159/molecule/behaviours/genserver"
 	"github.com/shun159/molecule/behaviours/supervisor"
 	"github.com/shun159/molecule/dist"
@@ -34,12 +35,13 @@ var names = []string{"a@localhost", "b@localhost", "c@localhost"}
 // cluster is a node for each of names, in this process, connected by
 // dist: on each, the storage and the members of the groups.
 type cluster struct {
-	t      *testing.T
-	groups []string
-	dir    string
-	mu     sync.Mutex
-	addrs  map[string]string
-	nodes  map[string]*node
+	t       *testing.T
+	groups  []string
+	dynamic bool // the groups started at runtime, under Groups
+	dir     string
+	mu      sync.Mutex
+	addrs   map[string]string
+	nodes   map[string]*node
 }
 
 type node struct {
@@ -74,6 +76,11 @@ func (c *cluster) start(name string) {
 	c.mu.Unlock()
 	dir := filepath.Join(c.dir, name)
 	children := []supervisor.ChildSpec{{ID: "storage", Start: quorum.Storage(dir)}}
+	if c.dynamic {
+		children = append(children, supervisor.ChildSpec{ID: "groups", Start: quorum.Groups(dir, func(g string) (gen.Child, error) {
+			return quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: counter{}, Dir: dir}), nil
+		})})
+	}
 	for _, g := range c.groups {
 		children = append(children, supervisor.ChildSpec{ID: g, Start: quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: counter{}, Dir: dir})})
 	}
@@ -268,5 +275,80 @@ func TestTransferLeader(t *testing.T) {
 		if sum, err := quorum.Command[int](ctx(t), a, group, names, 1); err != nil || sum != i+1 {
 			t.Fatalf("after moving to %s: %d, %v", to, sum, err)
 		}
+	}
+}
+
+// newDynamic returns a cluster whose groups are started at runtime.
+func newDynamic(t *testing.T) *cluster {
+	c := &cluster{t: t, dynamic: true, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
+	for _, name := range names {
+		c.start(name)
+	}
+	t.Cleanup(func() {
+		for _, name := range names {
+			c.stop(name)
+		}
+	})
+	return c
+}
+
+// runs reports which nodes run the member of group.
+func (c *cluster) runs(group string) []string {
+	var on []string
+	for _, name := range names {
+		if nd := c.nodes[name]; nd != nil {
+			if _, ok := nd.n.WhereIs("quorum/" + group); ok {
+				on = append(on, name)
+			}
+		}
+	}
+	return on
+}
+
+// Groups created at runtime run on their nodes, and again on a node
+// started again, with what they applied; deleted, they run nowhere, nor
+// again.
+func TestCreateGroup(t *testing.T) {
+	c := newDynamic(t)
+	a := c.nodes[names[0]].n
+	for _, g := range []string{"x", "y"} {
+		if err := quorum.CreateGroup(ctx(t), a, g, names); err != nil {
+			t.Fatal(err)
+		}
+		if err := quorum.CreateGroup(ctx(t), a, g, names); err != nil { // again, as after failing midway
+			t.Fatal(err)
+		}
+		if sum, err := quorum.Command[int](ctx(t), a, g, names, 2); err != nil || sum != 2 {
+			t.Fatalf("%s: %d, %v", g, sum, err)
+		}
+	}
+
+	b, cc := names[1], names[2]
+	c.stop(b)
+	c.start(b) // runs x and y again
+	c.stop(cc) // so that b's members must take part
+	for _, g := range []string{"x", "y"} {
+		if sum, err := quorum.Command[int](ctx(t), a, g, names, 1); err != nil || sum != 3 {
+			t.Fatalf("%s, b started again, c down: %d, %v", g, sum, err)
+		}
+	}
+	c.start(cc)
+
+	if err := quorum.DeleteGroup(ctx(t), a, "x", names); err != nil {
+		t.Fatal(err)
+	}
+	if on := c.runs("x"); len(on) != 0 {
+		t.Errorf("x deleted, runs on %v", on)
+	}
+	c.stop(b)
+	c.start(b)
+	if _, err := quorum.Command[int](ctx(t), a, "y", names, 1); err != nil {
+		t.Fatal(err)
+	}
+	if on := c.runs("x"); len(on) != 0 {
+		t.Errorf("x deleted, runs on %v, b started again", on)
+	}
+	if on := c.runs("y"); len(on) != 3 {
+		t.Errorf("y runs on %v", on)
 	}
 }

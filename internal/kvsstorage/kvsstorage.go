@@ -44,11 +44,13 @@ func (k Key) Compare(o Key) int {
 	return cmp.Or(cmp.Compare(k.Group, o.Group), cmp.Compare(k.Kind, o.Kind), cmp.Compare(k.Index, o.Index))
 }
 
-// Record is a record of a member, the field of its kind set.
+// Record is a record of a member, the field of its kind set; or of a group
+// started on the node, being deleted from it if Deleting.
 type Record struct {
 	State    raft.State
 	Snapshot raft.Snapshot
 	Entry    raft.Entry
+	Deleting bool
 }
 
 // Table is a table of members.

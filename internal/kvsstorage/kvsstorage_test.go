@@ -9,6 +9,7 @@ import (
 	"github.com/shun159/molecule/behaviours/genserver"
 	"github.com/shun159/molecule/behaviours/supervisor"
 	"github.com/shun159/molecule/gensim"
+	"github.com/shun159/molecule/kvs"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum/internal/raft"
 )
@@ -170,5 +171,49 @@ func TestChild(t *testing.T) {
 	defer table.Close()
 	if saved, _ := For(table, "g").Load(); !slices.Equal(saved.Log, entries(1, 1)) {
 		t.Errorf("loaded %+v from the table opened again", saved)
+	}
+}
+
+// The groups started on a node are kept with their members; forgotten, a
+// group's records are all gone, those of the others kept. One a crash
+// left being forgotten is told apart.
+func TestRegistered(t *testing.T) {
+	dir := t.TempDir()
+	n := proc.NewNode("a")
+	ctx := context.Background()
+	sup, err := supervisor.Start(ctx, n, supervisor.Spec{
+		Children: []supervisor.ChildSpec{{ID: "storage", Start: Child(dir)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer supervisor.Stop(ctx, n, sup)
+	for _, g := range []string{"x", "y", "z"} {
+		if err := Register(dir, g); err != nil {
+			t.Fatal(err)
+		}
+		st := In(dir, g)
+		save(t, st, st.SaveState(raft.State{Term: 1}, 1), st.Append(1, entries(1, 1), 2))
+	}
+	if err := Forget(dir, "y"); err != nil {
+		t.Fatal(err)
+	}
+	started, deleting, err := Registered(dir)
+	if err != nil || !slices.Equal(started, []string{"x", "z"}) || len(deleting) != 0 {
+		t.Fatalf("registered %v, deleting %v, %v", started, deleting, err)
+	}
+	if saved, _ := In(dir, "y").Load(); saved.State.Term != 0 || len(saved.Log) != 0 {
+		t.Errorf("y forgotten, loaded %+v", saved)
+	}
+	if saved, _ := In(dir, "x").Load(); len(saved.Log) != 2 {
+		t.Errorf("x loaded %+v", saved)
+	}
+
+	table, _ := kvs.Opened[Key, Record](dir)
+	if err := table.Put(registration("z"), Record{Deleting: true}); err != nil { // as a Forget cut short
+		t.Fatal(err)
+	}
+	if started, deleting, _ := Registered(dir); !slices.Equal(started, []string{"x"}) || !slices.Equal(deleting, []string{"z"}) {
+		t.Errorf("registered %v, deleting %v", started, deleting)
 	}
 }
