@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -248,6 +249,24 @@ func each(t *testing.T, groups []string, f func(g string) error) {
 	for range groups {
 		if err := <-errs; err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// The lead moves to each node in turn, over dist, the group taking
+// commands after each move.
+func TestTransferLeader(t *testing.T) {
+	c := newCluster(t, group)
+	a := c.nodes[names[0]].n
+	if err := quorum.Found(ctx(t), a, group, names); err != nil {
+		t.Fatal(err)
+	}
+	for i, to := range append(slices.Clone(names), names...) {
+		if err := quorum.TransferLeader(ctx(t), a, group, names, to); err != nil {
+			t.Fatalf("to %s: %v", to, err)
+		}
+		if sum, err := quorum.Command[int](ctx(t), a, group, names, 1); err != nil || sum != i+1 {
+			t.Fatalf("after moving to %s: %d, %v", to, sum, err)
 		}
 	}
 }

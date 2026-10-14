@@ -36,7 +36,8 @@
 // a group once, with its first members. [AddMember] adds a member as a
 // learner, which the leader makes a voter once it has caught up, and
 // returns then; and [RemoveMember] removes one. A change of members waits
-// for the one before it.
+// for the one before it. [TransferLeader] moves the lead to another voter,
+// as before taking a node down.
 //
 // # Storage
 //

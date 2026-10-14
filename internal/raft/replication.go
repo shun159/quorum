@@ -33,7 +33,7 @@ func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
 // surrender ends the leadership of the member. The commands it waits on
 // may be applied or not, which it cannot know: it tells their clients so.
 func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
-	effs := []actor.Effect{genstatem.CancelTimeout{Name: checkQuorum{}}}
+	effs := append([]actor.Effect{genstatem.CancelTimeout{Name: checkQuorum{}}}, d.endTransfer(applied{})...)
 	for _, p := range d.pending {
 		effs = append(effs, actor.Reply{To: p.from, Value: deposed{}})
 	}
@@ -137,6 +137,7 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 	if progress.next <= d.log.lastIndex() {
 		effs = append(effs, b.appendTo(d, progress))
 	}
+	effs = append(effs, b.handOver(&d)...)
 	return r, d, append(effs, b.promote(r, &d, progress)...)
 }
 

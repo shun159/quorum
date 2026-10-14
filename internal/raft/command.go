@@ -173,7 +173,13 @@ func pause(ctx context.Context, d time.Duration) error {
 // the founding of the group.
 func (b behaviour[S, Cmd, Rep]) call(r role, d replica[S], c genstatem.Call) (role, replica[S], []actor.Effect) {
 	switch c.Req.(type) {
-	case command, openSession, read, addMember, removeMember:
+	case command, openSession, addMember, removeMember:
+		if r == leader && d.transfer != nil {
+			return r, d, actor.Do(c.Reply(busy{})) // handing over
+		}
+	}
+	switch c.Req.(type) {
+	case command, openSession, read, addMember, removeMember, transferLeader:
 		if r == leader {
 			waking := b.wake(&d)
 			r, d, effs := b.serve(r, d, c)
@@ -200,6 +206,8 @@ func (b behaviour[S, Cmd, Rep]) serve(r role, d replica[S], c genstatem.Call) (r
 		return b.found(r, d, c, m)
 	case addMember, removeMember:
 		return b.change(r, d, c, m)
+	case transferLeader:
+		return b.transferLeader(r, d, c, m)
 	}
 	return r, d, nil
 }

@@ -104,6 +104,16 @@ func AddMember(ctx context.Context, caller actor.Caller, group string, nodes []s
 	return raft.AddMember(ctx, caller, group, nodes, node)
 }
 
+// TransferLeader has the leader of group, found among the members on
+// nodes, hand its place to the voter on node to, as before taking its own
+// node down: it takes no command meanwhile, which waits, until to holds
+// all its log, then has to stand at once. TransferLeader returns once to
+// leads; if it does not within the election timeout, the leader leads on,
+// and TransferLeader fails.
+func TransferLeader(ctx context.Context, caller actor.Caller, group string, nodes []string, to string) error {
+	return raft.TransferLeader(ctx, caller, group, nodes, to)
+}
+
 // RemoveMember removes the member on node from group, whoever it is,
 // asking the members on nodes for the leader, and returns once the removal
 // is committed. A leader removing itself steps down then.

@@ -9,7 +9,7 @@ func init() {
 	dist.Register(preVote{}, preVoteReply{}, requestVote{}, voteReply{}, appendEntries{}, appendReply{},
 		whoLeads{}, command{}, read{}, applied{}, expired{}, openSession{}, Origin{}, redirect{}, deposed{}, rejected{},
 		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{},
-		installSnapshot{})
+		installSnapshot{}, transferLeader{}, timeoutNow{})
 }
 
 // The messages between the members of a group, the RPCs of Raft, sent as
@@ -62,6 +62,13 @@ type (
 		To       proc.PID
 		Snapshot Snapshot
 	}
+	// timeoutNow tells the member To, which holds all the log of the
+	// leader of Term, to stand at once: the leader hands over to it.
+	timeoutNow struct {
+		Term   uint64
+		Leader proc.PID
+		To     proc.PID
+	}
 	// appendReply tells the leader how far the log of From matches its
 	// own, Match, or, failing, how long it is, for the leader to go back.
 	appendReply struct {
@@ -84,6 +91,7 @@ func (m appendEntries) term() uint64 { return m.Term }
 func (m appendReply) term() uint64   { return m.Term }
 
 func (m installSnapshot) term() uint64 { return m.Term }
+func (m timeoutNow) term() uint64      { return m.Term }
 
 // addressed is a message to one member, which a member other than To on
 // its node, a later one, drops.
@@ -91,6 +99,7 @@ type addressed interface{ to() proc.PID }
 
 func (m appendEntries) to() proc.PID   { return m.To }
 func (m installSnapshot) to() proc.PID { return m.To }
+func (m timeoutNow) to() proc.PID      { return m.To }
 
 // A command from a client, and the replies it may get.
 type (
@@ -124,5 +133,7 @@ type (
 type (
 	addMember    struct{ ID proc.PID }
 	removeMember struct{ Node string }
-	busy         struct{} // not appended: a change is under way
+
+	transferLeader struct{ To string } // the node to hand the lead to
+	busy           struct{}            // not appended: a change is under way
 )

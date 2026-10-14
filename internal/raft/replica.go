@@ -52,6 +52,8 @@ type replica[S any] struct {
 	readSeq uint64     // its last round of confirming reads, as the leader
 	round   uint64     // of the checks of the quorum, as the leader
 
+	transfer *transferring // the leader handing over, if it is
+
 	quiet   bool     // the group is quiet, see Quiet
 	idle    int      // the beats in a row with nothing to do, as the leader
 	unheard []string // the nodes silent or down, as dist tells
@@ -178,8 +180,11 @@ func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.E
 	case genstatem.StateTimeout:
 		return b.timeout(r, d)
 	case genstatem.Timeout:
-		if e.Name == (checkQuorum{}) {
+		switch e.Name {
+		case checkQuorum{}:
 			return b.checkQuorum(r, d)
+		case transferTimeout{}:
+			return b.transferTimedOut(r, d)
 		}
 	case genstatem.Call:
 		return b.call(r, d, e)
@@ -264,6 +269,8 @@ func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, rep
 		return b.appendReply(r, d, m)
 	case installSnapshot:
 		return b.installSnapshot(r, d, m)
+	case timeoutNow:
+		return b.timeoutNow(r, d, m)
 	}
 	return r, d, nil
 }

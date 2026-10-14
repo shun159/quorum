@@ -228,10 +228,10 @@ func (g *group) checkSwapped(seed uint64) {
 // disturb may cut a member or two off the others; or crash one amid the
 // steps to come, its storage keeping some of the writes it did not know
 // were durable; or replace the disk of one, for the operator to swap its
-// member.
+// member; or have the leader hand over to one.
 func (g *group) disturb(r *rand.Rand) {
 	members := g.members
-	switch r.IntN(5) {
+	switch r.IntN(6) {
 	case 0: // all well
 	case 1:
 		i := r.IntN(len(members))
@@ -248,6 +248,10 @@ func (g *group) disturb(r *rand.Rand) {
 		g.due = &crashLater{member: members[r.IntN(len(members))], steps: r.IntN(300), keep: r.IntN(3)}
 	case 4:
 		g.replaceDisk(members[r.IntN(len(members))])
+	case 5:
+		if l, ok := g.anyLeader(); ok {
+			g.s.Call(g.at(l), transferLeader{To: members[r.IntN(len(members))]})
+		}
 	}
 }
 
