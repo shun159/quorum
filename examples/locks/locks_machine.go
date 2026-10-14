@@ -50,7 +50,7 @@ type Reply struct {
 }
 
 func init() {
-	dist.Register(Op{}, Reply{}, Locks{})
+	dist.Register(Op{}, Reply{}, Locks{}, Granted{}, Released{})
 }
 
 // machine is the quorum.Machine of the locks, and a quorum.Reader.
@@ -61,11 +61,9 @@ func (machine) Init() Locks { return Locks{} }
 func (machine) Apply(l Locks, op Op) (Locks, Reply, []actor.Effect) {
 	switch op.Kind {
 	case Acquire:
-		l, rep := l.lock(op.Name, op.Owner)
-		return l, rep, nil
+		return l.lock(op.Name, op.Owner)
 	case Release:
-		l, rep := l.unlock(op.Name, op.Owner)
-		return l, rep, nil
+		return l.unlock(op.Name, op.Owner)
 	}
 	return l, Reply{}, nil
 }
@@ -75,11 +73,12 @@ func (machine) Read(l Locks, op Op) Reply {
 	return Reply{Holder: h, OK: ok}
 }
 
-// lock gives the lock name to owner with a new token, if no one holds it.
-// Its holder asking again keeps it, with the same token.
-func (l Locks) lock(name, owner string) (Locks, Reply) {
+// lock gives the lock name to owner with a new token, if no one holds it,
+// and tells the holder of the node of owner. Its holder asking again keeps
+// it, with the same token.
+func (l Locks) lock(name, owner string) (Locks, Reply, []actor.Effect) {
 	if h, ok := l.Held[name]; ok {
-		return l, Reply{Holder: h, OK: h.Owner == owner}
+		return l, Reply{Holder: h, OK: h.Owner == owner}, nil
 	}
 	l.Last++
 	h := Holder{Owner: owner, Token: l.Last}
@@ -88,18 +87,19 @@ func (l Locks) lock(name, owner string) (Locks, Reply) {
 		l.Held = map[string]Holder{}
 	}
 	l.Held[name] = h
-	return l, Reply{Holder: h, OK: true}
+	return l, Reply{Holder: h, OK: true}, actor.Do(actor.Send{To: holderAt(owner), Msg: Granted{name, h.Token}})
 }
 
-// unlock frees the lock name, if owner holds it.
-func (l Locks) unlock(name, owner string) (Locks, Reply) {
+// unlock frees the lock name, if owner holds it, and tells the holder of
+// the node of owner.
+func (l Locks) unlock(name, owner string) (Locks, Reply, []actor.Effect) {
 	h, ok := l.Held[name]
 	if !ok || h.Owner != owner {
-		return l, Reply{Holder: h}
+		return l, Reply{Holder: h}, nil
 	}
 	l.Held = maps.Clone(l.Held)
 	delete(l.Held, name)
-	return l, Reply{OK: true}
+	return l, Reply{OK: true}, actor.Do(actor.Send{To: holderAt(owner), Msg: Released{name, h.Token}})
 }
 
 // spec is the group of the locks, its member keeping its log in dir.

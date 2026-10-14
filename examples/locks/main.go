@@ -2,13 +2,15 @@
 // the group agrees on who holds each lock, so a lock is not lost, nor
 // given twice, while two of the three nodes live.
 //
-//	locks_sup (one_for_all)
-//	├── locks_storage  the storage of the node, in -dir
-//	└── locks_member   the member of the group, its log in the storage
+//	locks_sup (one_for_one)
+//	├── locks_group (one_for_all)
+//	│   ├── locks_storage  the storage of the node, in -dir
+//	│   └── locks_member   the member of the group, its log in the storage
+//	└── locks_holder       shows the locks the node holds, and works with them
 //
 // Each file holds one "module": locks_app.go is the application,
-// locks_sup.go the supervisor, locks_machine.go the state machine and its
-// API, locks_console.go the console.
+// locks_sup.go the supervisors, locks_machine.go the state machine and its
+// API, locks_holder.go the holder, locks_console.go the console.
 //
 //	go run ./examples/locks -name a@localhost
 //	go run ./examples/locks -name b@localhost
@@ -20,9 +22,13 @@
 //	found
 //	founded on a@localhost, b@localhost, c@localhost
 //	lock printer
+//	*** printer: held here, token 1
 //	ok, token 1
+//	*** printer: working with token 1
 //
-// On b:
+// The leader tells the node that took the lock, an effect of the machine,
+// which only the leader performs; the holder of the node works with it
+// every few seconds, until it is unlocked. On b:
 //
 //	lock printer
 //	held by a@localhost, token 1
@@ -69,7 +75,7 @@ func main() {
 	}
 	defer d.Stop()
 
-	app, err := startLocks(context.Background(), n, filepath.Join(*dir, *name))
+	app, err := startLocks(context.Background(), n, filepath.Join(*dir, *name), startDisplay(n, os.Stdout))
 	if err != nil {
 		log.Fatal(err)
 	}
