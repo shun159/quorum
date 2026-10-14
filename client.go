@@ -78,8 +78,13 @@ func (c Client[Cmd, Rep]) Handle(msg any) (Client[Cmd, Rep], []actor.Effect, *Re
 	var effs []actor.Effect
 	var r *raft.Result[Rep]
 	c.c, effs, r = c.c.Handle(msg)
+	return c, effs, resultOf(r)
+}
+
+// resultOf returns r as quorum has it.
+func resultOf[Rep any](r *raft.Result[Rep]) *Result[Rep] {
 	if r == nil {
-		return c, effs, nil
+		return nil
 	}
-	return c, effs, &Result[Rep]{Tag: r.Tag, Rep: r.Rep, Err: r.Err}
+	return &Result[Rep]{Tag: r.Tag, Rep: r.Rep, Err: errOf(r.Err)}
 }

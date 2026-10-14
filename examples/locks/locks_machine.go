@@ -7,7 +7,6 @@ import (
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/quorum"
-	"github.com/shun159/quorum/kvsstorage"
 )
 
 // group is the name of the group of the locks.
@@ -105,7 +104,7 @@ func (l Locks) unlock(name, owner string) (Locks, Reply) {
 
 // spec is the group of the locks, its member keeping its log in dir.
 func spec(dir string) quorum.Spec[Locks, Op, Reply] {
-	return quorum.Spec[Locks, Op, Reply]{Group: group, Machine: machine{}, Storage: kvsstorage.In(dir, group)}
+	return quorum.Spec[Locks, Op, Reply]{Group: group, Machine: machine{}, Dir: dir}
 }
 
 // Lock has owner take the lock name, asking the group on nodes.

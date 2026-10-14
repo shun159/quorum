@@ -3,8 +3,8 @@
 // given twice, while two of the three nodes live.
 //
 //	locks_sup (one_for_all)
-//	├── locks_storage  the table on disk, in -dir
-//	└── locks_member   the member of the group, its log in the table
+//	├── locks_storage  the storage of the node, in -dir
+//	└── locks_member   the member of the group, its log in the storage
 //
 // Each file holds one "module": locks_app.go is the application,
 // locks_sup.go the supervisor, locks_machine.go the state machine and its

@@ -2,9 +2,11 @@ package quorum
 
 import (
 	"context"
+	"errors"
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/gen"
+	"github.com/shun159/quorum/internal/kvsstorage"
 	"github.com/shun159/quorum/internal/raft"
 )
 
@@ -15,14 +17,43 @@ func Child[S, Cmd, Rep any](spec Spec[S, Cmd, Rep]) gen.Child {
 	return raft.Child(spec.raft())
 }
 
+// Storage returns the storage of the members on the node, kept in dir,
+// made if missing, to start under a supervisor ahead of them: their
+// Spec.Dir is dir. It opens as it starts, failing to start if it cannot,
+// and closes as it stops. One storage serves all the groups of the node,
+// the writes of all going to disk together.
+//
+// Start it and the members under OneForAll: a member stops on a write
+// failed, after which the storage must open again.
+//
+//	Strategy: supervisor.OneForAll,
+//	Children: []supervisor.ChildSpec{
+//		{ID: "storage", Start: quorum.Storage(dir)},
+//		{ID: "member", Start: quorum.Child(quorum.Spec[S, Cmd, Rep]{Group: "g", Machine: m, Dir: dir})},
+//	},
+func Storage(dir string) gen.Child {
+	return kvsstorage.Child(dir)
+}
+
 // ErrLeaderChanged is the error of a command whose leader lost its place
 // before it could tell: the command may have been applied, or not.
-var ErrLeaderChanged = raft.ErrLeaderChanged
+var ErrLeaderChanged = errors.New("quorum: the leader changed; the command may have been applied or not")
 
 // ErrSessionExpired is the error of a command of a Client whose session
 // expired before it was applied. Sent before, it may have been applied
 // then.
-var ErrSessionExpired = raft.ErrSessionExpired
+var ErrSessionExpired = errors.New("quorum: the session expired; the command may have been applied before or not")
+
+// errOf returns err as quorum has it.
+func errOf(err error) error {
+	switch err {
+	case raft.ErrLeaderChanged:
+		return ErrLeaderChanged
+	case raft.ErrSessionExpired:
+		return ErrSessionExpired
+	}
+	return err
+}
 
 // Command has group apply cmd, and returns its reply. It asks the members
 // on nodes in turn who leads, past those down, and sends cmd to the one
@@ -33,7 +64,8 @@ var ErrSessionExpired = raft.ErrSessionExpired
 // cmd. Command does not try it again, as applying it twice may differ from
 // once. A Client does, in a session, which has the group apply it once.
 func Command[Rep, Cmd any](ctx context.Context, caller actor.Caller, group string, nodes []string, cmd Cmd) (Rep, error) {
-	return raft.Command[Rep](ctx, caller, group, nodes, cmd)
+	rep, err := raft.Command[Rep](ctx, caller, group, nodes, cmd)
+	return rep, errOf(err)
 }
 
 // Read has group answer cmd from its state, as its Machine's Read does,
@@ -43,7 +75,8 @@ func Command[Rep, Cmd any](ctx context.Context, caller actor.Caller, group strin
 //
 // A read changes nothing: on an error, it may be tried again.
 func Read[Rep, Cmd any](ctx context.Context, caller actor.Caller, group string, nodes []string, cmd Cmd) (Rep, error) {
-	return raft.Read[Rep](ctx, caller, group, nodes, cmd)
+	rep, err := raft.Read[Rep](ctx, caller, group, nodes, cmd)
+	return rep, errOf(err)
 }
 
 // Found founds group with its members on nodes, all voters, each started

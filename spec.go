@@ -1,8 +1,10 @@
 package quorum
 
 import (
+	"cmp"
 	"time"
 
+	"github.com/shun159/quorum/internal/kvsstorage"
 	"github.com/shun159/quorum/internal/raft"
 )
 
@@ -29,31 +31,37 @@ type Spec[S, Cmd, Rep any] struct {
 	// SessionTimeout is how long, by the time of the log, a session of a
 	// Client lasts without a command: zero means DefaultSessionTimeout.
 	SessionTimeout time.Duration
-	// Storage keeps who the member is, its term, its vote and its log
-	// across restarts, each member its own. Without one, the member keeps
-	// them in memory only: restarted, it is another member, which the
-	// group must add.
-	Storage raft.Storage
+	// Dir is the directory of the Storage the member keeps who it is and
+	// its log in, across restarts. Empty, the member keeps them in memory
+	// only: restarted, it is another member, which the group must add.
+	Dir string
 }
 
 // DefaultElectionTimeout is Spec.ElectionTimeout when zero.
-const DefaultElectionTimeout = raft.DefaultElectionTimeout
+const DefaultElectionTimeout = 300 * time.Millisecond
 
 // DefaultSnapshotEvery is Spec.SnapshotEvery when zero.
-const DefaultSnapshotEvery = raft.DefaultSnapshotEvery
+const DefaultSnapshotEvery = 10000
 
 // DefaultSessionTimeout is Spec.SessionTimeout when zero.
-const DefaultSessionTimeout = raft.DefaultSessionTimeout
+const DefaultSessionTimeout = time.Minute
 
-// raft returns spec as the member takes it.
+// raft returns spec as the member takes it, its zeros the defaults.
 func (spec Spec[S, Cmd, Rep]) raft() raft.Spec[S, Cmd, Rep] {
 	return raft.Spec[S, Cmd, Rep]{
 		Group:           spec.Group,
 		Machine:         spec.Machine,
-		ElectionTimeout: spec.ElectionTimeout,
-		Heartbeat:       spec.Heartbeat,
-		SnapshotEvery:   spec.SnapshotEvery,
-		SessionTimeout:  spec.SessionTimeout,
-		Storage:         spec.Storage,
+		ElectionTimeout: cmp.Or(spec.ElectionTimeout, DefaultElectionTimeout),
+		Heartbeat:       spec.Heartbeat, // a sixth of ElectionTimeout, if zero
+		SnapshotEvery:   cmp.Or(spec.SnapshotEvery, DefaultSnapshotEvery),
+		SessionTimeout:  cmp.Or(spec.SessionTimeout, DefaultSessionTimeout),
+		Storage:         spec.storage(),
 	}
+}
+
+func (spec Spec[S, Cmd, Rep]) storage() raft.Storage {
+	if spec.Dir == "" {
+		return nil
+	}
+	return kvsstorage.In(spec.Dir, spec.Group)
 }

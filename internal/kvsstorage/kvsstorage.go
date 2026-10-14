@@ -3,19 +3,9 @@
 // One table serves all the groups of a node, each member its own part of
 // it, so that the writes of all go to disk together.
 //
-// The table is a child of the supervision tree, which opens it as it
-// starts and closes it as it stops, ahead of the members, which find it
-// by its directory:
-//
-//	Strategy: supervisor.OneForAll,
-//	Children: []supervisor.ChildSpec{
-//		{ID: "storage", Start: kvsstorage.Child(dir)},
-//		{ID: "member", Start: quorum.Child(spec)}, // spec.Storage = kvsstorage.In(dir, spec.Group)
-//	},
-//
-// Under OneForAll, the table and the members restart together: a member
-// stops on a write failed, after which the table must be opened again. A
-// table opened by hand is For.
+// The table is a child of the supervision tree, quorum.Storage, which
+// opens it as it starts and closes it as it stops; the members, In it,
+// find it by its directory. A table opened by hand is For.
 //
 // The commands and the states of the machines are encoded by gob: their
 // types must be registered, as dist.Register does.
