@@ -35,6 +35,7 @@ type group struct {
 	states    map[uint64]int    // the state of the machine seen at each index applied
 
 	due *crashLater // a crash to come, amid the steps of a run
+	op  proc.PID    // the operator swapping members, if any
 }
 
 // crashLater is a crash of member after so many steps, its storage

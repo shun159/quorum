@@ -2,10 +2,13 @@ package quorum
 
 import (
 	"math/rand/v2"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/shun159/molecule/actor"
+	"github.com/shun159/molecule/behaviours/gen"
 	"github.com/shun159/molecule/behaviours/genserver"
 	"github.com/shun159/molecule/gensim"
 	"github.com/shun159/molecule/proc"
@@ -91,10 +94,11 @@ func FuzzChaos(f *testing.F) {
 	})
 }
 
-// chaos runs a group under partitions, crashes and lost messages, of three
-// members or five as the seed has it,
-// checking it at every step. Once healed and quiet, the members all hold the same
-// count, which has every command acknowledged, and no more than were sent.
+// chaos runs a group under partitions, crashes, disks replaced and lost
+// messages, of three members or five as the seed has it, checking it at
+// every step. Once healed and quiet, the members all hold the same count,
+// which has every command acknowledged, and no more than were sent; and
+// every node's member is a voter.
 func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 	t.Helper()
 	// Three are the most fragile: one member losing a write may lose what
@@ -102,10 +106,8 @@ func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 	members := []string{"a", "b", "c", "d", "e"}[:[]int{3, 5}[seed%2]]
 	g := newGroup(t, seed, members, opts...)
 	g.s.Loss = 0.05
-	cl, err := gensim.Spawn(g.s, genserver.Gen(client{group: g.name, members: members}), nil, gensim.On("client"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	cl := spawn(g, genserver.Gen(client{group: g.name, members: members}), "client")
+	g.op = spawn(g, genserver.Gen(operator{group: g.name, members: members}), "operator")
 
 	r := rand.New(rand.NewPCG(seed, 5))
 	for range 20 {
@@ -120,27 +122,71 @@ func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 	g.s.Loss = 0
 	g.run(5 * time.Second)
 
-	_, d, _ := g.member(members[0])
-	for _, m := range members {
+	g.checkCount(seed, o)
+	g.checkSwapped(seed)
+}
+
+// sameMembers reports whether a and b hold the same members, in any order.
+func sameMembers(a, b []proc.PID) bool {
+	byID := func(x, y proc.PID) int { return strings.Compare(x.String(), y.String()) }
+	return slices.Equal(slices.SortedFunc(slices.Values(a), byID), slices.SortedFunc(slices.Values(b), byID))
+}
+
+// spawn spawns b on node, in the simulation of g.
+func spawn[S any](g *group, b gen.Behaviour[S], node string) proc.PID {
+	g.t.Helper()
+	pid, err := gensim.Spawn(g.s, b, nil, gensim.On(node))
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	return pid
+}
+
+// checkCount checks that the members all hold the same count, which has
+// every command o has acknowledged, and no more than it sent.
+func (g *group) checkCount(seed uint64, o outcomes) {
+	g.t.Helper()
+	_, d, _ := g.member(g.members[0])
+	for _, m := range g.members {
 		if _, dm, _ := g.member(m); dm.state != d.state {
-			t.Fatalf("seed %d: %s holds %d, %s %d", seed, m, dm.state, members[0], d.state)
+			g.t.Fatalf("seed %d: %s holds %d, %s %d", seed, m, dm.state, g.members[0], d.state)
 		}
 	}
 	out := o.unknown + o.quorum.Out()
 	if d.state < o.acked || d.state > o.acked+out {
-		t.Fatalf("seed %d: count %d, with %d acknowledged and %d unknown", seed, d.state, o.acked, out)
+		g.t.Fatalf("seed %d: count %d, with %d acknowledged and %d unknown", seed, d.state, o.acked, out)
 	}
 	if o.acked == 0 {
-		t.Errorf("seed %d: nothing acknowledged", seed)
+		g.t.Errorf("seed %d: nothing acknowledged", seed)
 	}
 }
 
-// disturb may cut a member or two off the others, or crash one amid the
+// checkSwapped checks that the operator is done swapping, and that the
+// members of all nodes, the new ones included, are the voters.
+func (g *group) checkSwapped(seed uint64) {
+	g.t.Helper()
+	s, _ := gensim.State[swapping](g.s, g.op)
+	if s.step != idle {
+		g.t.Fatalf("seed %d: swapping %s still, at step %d", seed, s.node, s.step)
+	}
+	var ids []proc.PID
+	for _, m := range g.members {
+		_, d, _ := g.member(m)
+		ids = append(ids, d.id)
+	}
+	_, d, _ := g.member(g.leader())
+	if len(d.config.Learners) > 0 || !sameMembers(d.config.Voters, ids) {
+		g.t.Fatalf("seed %d: members %v, after %d swaps, but configuration %+v", seed, ids, s.swaps, d.config)
+	}
+}
+
+// disturb may cut a member or two off the others; or crash one amid the
 // steps to come, its storage keeping some of the writes it did not know
-// were durable.
+// were durable; or replace the disk of one, for the operator to swap its
+// member.
 func (g *group) disturb(r *rand.Rand) {
 	members := g.members
-	switch r.IntN(4) {
+	switch r.IntN(5) {
 	case 0: // all well
 	case 1:
 		i := r.IntN(len(members))
@@ -155,7 +201,20 @@ func (g *group) disturb(r *rand.Rand) {
 		g.s.Partition(minority, majority)
 	case 3:
 		g.due = &crashLater{member: members[r.IntN(len(members))], steps: r.IntN(300), keep: r.IntN(3)}
+	case 4:
+		g.replaceDisk(members[r.IntN(len(members))])
 	}
+}
+
+// replaceDisk restarts node m on a new disk, and has the operator swap its
+// member, unless it is swapping another.
+func (g *group) replaceDisk(m string) {
+	if s, _ := gensim.State[swapping](g.s, g.op); s.step != idle {
+		return
+	}
+	g.loseDisk(m)
+	g.restart(m)
+	g.s.Cast(g.op, swap{m})
 }
 
 // recover heals the partitions, and restarts the members crashed.
