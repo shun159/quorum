@@ -49,8 +49,8 @@ sum, err := quorum.Command[int](ctx, node, "counter", nodes, 5) // 5
 A behaviour, which must not block, sends commands with a `quorum.Client`
 instead, each applied once however often it is sent again.
 
-[examples/locks](examples/locks) is a lock service on three nodes: the
-group agrees on who holds each lock, with fencing tokens, while any one
-node is down.
+[examples/locks](examples/locks) is a lock service on three nodes: its
+locks spread over eight groups, each led on any node, which agree on who
+holds each lock, with fencing tokens, while any one node is down.
 
 Work in progress: see the package documentation for what there is not yet.

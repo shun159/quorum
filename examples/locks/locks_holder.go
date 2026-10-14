@@ -33,31 +33,79 @@ type (
 	}
 )
 
-// holder shows, on its display, the locks its node takes and frees: the
-// token by lock.
+// Leading tells the holder of a node that its member of Group leads it,
+// in Term; Following, that it leads no more. The member sends them as it
+// becomes the leader, and stops being one.
+type (
+	Leading struct {
+		Group string
+		Term  uint64
+	}
+	Following struct{ Group string }
+)
+
+// leadsReq asks the holder of a node which groups the node leads; Leads
+// answers, the term by group.
+type (
+	leadsReq struct{}
+	Leads    struct{ Groups map[string]uint64 }
+)
+
+// holder shows, on its display, the locks its node takes and frees, and
+// the groups it comes to lead, and leads no more; it tells which it
+// leads.
 type holder struct {
-	genserver.Default[map[string]uint64]
+	genserver.Default[holding]
 	Display proc.PID
 }
 
-func (h holder) HandleInfo(held map[string]uint64, msg any) (map[string]uint64, []actor.Effect) {
+// holding is what the node holds: the token by lock, and the term by
+// group led.
+type holding struct {
+	held  map[string]uint64
+	leads map[string]uint64
+}
+
+func (h holder) HandleInfo(s holding, msg any) (holding, []actor.Effect) {
 	switch m := msg.(type) {
 	case Granted:
-		held = maps.Clone(held)
-		if held == nil {
-			held = map[string]uint64{}
-		}
-		held[m.Name] = m.Token
-		return held, actor.Do(h.show("this node holds the lock %q, token %d", m.Name, m.Token))
+		s.held = with(s.held, m.Name, m.Token)
+		return s, actor.Do(h.show("this node holds the lock %q, token %d", m.Name, m.Token))
 	case Released:
-		if held[m.Name] != m.Token {
-			return held, nil
+		if s.held[m.Name] != m.Token {
+			return s, nil
 		}
-		held = maps.Clone(held)
-		delete(held, m.Name)
-		return held, actor.Do(h.show("this node freed the lock %q", m.Name))
+		s.held = without(s.held, m.Name)
+		return s, actor.Do(h.show("this node freed the lock %q", m.Name))
+	case Leading:
+		s.leads = with(s.leads, m.Group, m.Term)
+		return s, actor.Do(h.show("this node leads %s, term %d", m.Group, m.Term))
+	case Following:
+		s.leads = without(s.leads, m.Group)
+		return s, actor.Do(h.show("this node leads %s no more", m.Group))
 	}
-	return held, nil
+	return s, nil
+}
+
+func (holder) HandleCall(s holding, _ leadsReq, from genserver.From[Leads]) (holding, []actor.Effect) {
+	return s, actor.Do(from.Reply(Leads{maps.Clone(s.leads)}))
+}
+
+// with returns a copy of m with k set to v.
+func with(m map[string]uint64, k string, v uint64) map[string]uint64 {
+	m = maps.Clone(m)
+	if m == nil {
+		m = map[string]uint64{}
+	}
+	m[k] = v
+	return m
+}
+
+// without returns a copy of m without k.
+func without(m map[string]uint64, k string) map[string]uint64 {
+	m = maps.Clone(m)
+	delete(m, k)
+	return m
 }
 
 func (h holder) show(format string, args ...any) actor.Effect {

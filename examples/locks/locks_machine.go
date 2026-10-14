@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"maps"
 
 	"github.com/shun159/molecule/actor"
@@ -9,11 +11,8 @@ import (
 	"github.com/shun159/quorum"
 )
 
-// group is the name of the group of the locks.
-const group = "locks"
-
-// Locks is the state the group replicates: who holds each lock. It is a
-// value: lock and unlock change a copy of Held.
+// Locks is the state a group replicates: who holds each of its locks. It
+// is a value: lock and unlock change a copy of Held.
 type Locks struct {
 	Held map[string]Holder
 	Last uint64 // the last token given
@@ -27,7 +26,8 @@ type Holder struct {
 	Token uint64
 }
 
-// Op is a command to the group: lock, unlock, or ask who holds a lock.
+// Op is a command to a group: lock, unlock, ask who holds a lock, or how
+// many are held.
 type Op struct {
 	Kind  Kind
 	Name  string
@@ -40,23 +40,35 @@ const (
 	Acquire Kind = iota + 1
 	Release
 	Query // a read, see machine.Read
+	Count // a read
 )
 
 // Reply is what an Op comes to: the holder of the lock, and whether the
-// Op did as asked.
+// Op did as asked; or, counting, how many locks are held.
 type Reply struct {
 	Holder Holder
 	OK     bool
+	Count  int
 }
 
 func init() {
-	dist.Register(Op{}, Reply{}, Locks{}, Granted{}, Released{})
+	dist.Register(Op{}, Reply{}, Locks{}, Granted{}, Released{}, Leading{}, Following{}, leadsReq{}, Leads{})
 }
 
-// machine is the quorum.Machine of the locks, and a quorum.Reader.
-type machine struct{}
+// machine is the quorum.Machine of the locks of group, a quorum.Reader,
+// and a quorum.Leader: it tells the holder of its node when the node
+// leads the group, and when no more.
+type machine struct{ group string }
 
 func (machine) Init() Locks { return Locks{} }
+
+func (m machine) Elected(_ Locks, term uint64) []actor.Effect {
+	return actor.Do(actor.Send{To: holderName, Msg: Leading{m.group, term}})
+}
+
+func (m machine) Surrendered(Locks) []actor.Effect {
+	return actor.Do(actor.Send{To: holderName, Msg: Following{m.group}})
+}
 
 func (machine) Apply(l Locks, op Op) (Locks, Reply, []actor.Effect) {
 	switch op.Kind {
@@ -69,6 +81,9 @@ func (machine) Apply(l Locks, op Op) (Locks, Reply, []actor.Effect) {
 }
 
 func (machine) Read(l Locks, op Op) Reply {
+	if op.Kind == Count {
+		return Reply{Count: len(l.Held)}
+	}
 	h, ok := l.Held[op.Name]
 	return Reply{Holder: h, OK: ok}
 }
@@ -102,22 +117,61 @@ func (l Locks) unlock(name, owner string) (Locks, Reply, []actor.Effect) {
 	return l, Reply{OK: true}, actor.Do(actor.Send{To: holderAt(owner), Msg: Released{name, h.Token}})
 }
 
-// spec is the group of the locks, its member keeping its log in dir.
-func spec(dir string) quorum.Spec[Locks, Op, Reply] {
-	return quorum.Spec[Locks, Op, Reply]{Group: group, Machine: machine{}, Dir: dir}
+// Service is the lock service on Nodes, its locks spread over Groups
+// groups by their names: each group decides on its own, its leader on any
+// of the nodes, so that the work spreads over them.
+type Service struct {
+	Nodes  []string
+	Groups int
 }
 
-// Lock has owner take the lock name, asking the group on nodes.
-func Lock(ctx context.Context, caller actor.Caller, nodes []string, name, owner string) (Reply, error) {
-	return quorum.Command[Reply](ctx, caller, group, nodes, Op{Kind: Acquire, Name: name, Owner: owner})
+// group returns the name of the group i.
+func group(i int) string { return fmt.Sprintf("locks/%d", i) }
+
+// groupOf returns the group of the lock name.
+func (s Service) groupOf(name string) string {
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	return group(int(h.Sum32() % uint32(s.Groups)))
+}
+
+// specs are the members of the groups on a node, keeping their logs in
+// dir.
+func (s Service) specs(dir string) []quorum.Spec[Locks, Op, Reply] {
+	var specs []quorum.Spec[Locks, Op, Reply]
+	for i := range s.Groups {
+		specs = append(specs, quorum.Spec[Locks, Op, Reply]{Group: group(i), Machine: machine{group(i)}, Dir: dir})
+	}
+	return specs
+}
+
+// Found founds the groups, on all the nodes.
+func (s Service) Found(ctx context.Context, caller actor.Caller) error {
+	for i := range s.Groups {
+		if err := quorum.Found(ctx, caller, group(i), s.Nodes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Lock has owner take the lock name.
+func (s Service) Lock(ctx context.Context, caller actor.Caller, name, owner string) (Reply, error) {
+	return quorum.Command[Reply](ctx, caller, s.groupOf(name), s.Nodes, Op{Kind: Acquire, Name: name, Owner: owner})
 }
 
 // Unlock has owner free the lock name.
-func Unlock(ctx context.Context, caller actor.Caller, nodes []string, name, owner string) (Reply, error) {
-	return quorum.Command[Reply](ctx, caller, group, nodes, Op{Kind: Release, Name: name, Owner: owner})
+func (s Service) Unlock(ctx context.Context, caller actor.Caller, name, owner string) (Reply, error) {
+	return quorum.Command[Reply](ctx, caller, s.groupOf(name), s.Nodes, Op{Kind: Release, Name: name, Owner: owner})
 }
 
 // Who returns who holds the lock name: a read, which goes through no log.
-func Who(ctx context.Context, caller actor.Caller, nodes []string, name string) (Reply, error) {
-	return quorum.Read[Reply](ctx, caller, group, nodes, Op{Kind: Query, Name: name})
+func (s Service) Who(ctx context.Context, caller actor.Caller, name string) (Reply, error) {
+	return quorum.Read[Reply](ctx, caller, s.groupOf(name), s.Nodes, Op{Kind: Query, Name: name})
+}
+
+// Count returns how many locks of group are held.
+func (s Service) Count(ctx context.Context, caller actor.Caller, group string) (int, error) {
+	r, err := quorum.Read[Reply](ctx, caller, group, s.Nodes, Op{Kind: Count})
+	return r.Count, err
 }

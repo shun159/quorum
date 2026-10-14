@@ -1,12 +1,16 @@
 // Command locks is a lock service replicated over three nodes by quorum:
-// the group agrees on who holds each lock, so a lock is not lost, nor
-// given twice, while two of the three nodes live.
+// groups agree on who holds each lock, so a lock is not lost, nor given
+// twice, while two of the three nodes live. The locks spread over groups,
+// eight by default, by their names: each group has its own leader, on any
+// node, so the work spreads over the nodes, and a node lost moves only
+// the groups it led.
 //
 //	locks_sup (one_for_one)
-//	├── locks_group (one_for_all)
-//	│   ├── locks_storage  the storage of the node, in -dir
-//	│   └── locks_member   the member of the group, its log in the storage
-//	└── locks_holder       shows the locks the node takes and frees
+//	├── locks_groups (one_for_all)
+//	│   ├── locks_storage      the storage of the node, in -dir, for all the groups
+//	│   └── locks_members (one_for_one)
+//	│       └── locks_member_0 … the member of each group, its log in the storage
+//	└── locks_holder           shows the locks the node takes and frees, and the groups it leads
 //
 // Each file holds one "module": locks_app.go is the application,
 // locks_sup.go the supervisors, locks_machine.go the state machine and its
@@ -16,26 +20,37 @@
 //	go run ./examples/locks -name b@localhost
 //	go run ./examples/locks -name c@localhost
 //
-// Once the three are up, found the group, once, on any of them; then take
-// locks, by any name, for the node they are typed on:
+// Once the three are up, found the groups, once, on any of them; then take
+// locks, by any name, for the node they are typed on. Each node tells the
+// groups it comes to lead:
 //
 //	found
-//	founded on a@localhost, b@localhost, c@localhost
+//	*** this node leads locks/1, term 1
+//	founded 8 groups on a@localhost, b@localhost, c@localhost
 //	lock printer
 //	*** this node holds the lock "printer", token 1
 //	ok, token 1
 //
-// The leader tells the node that took the lock, an effect of the machine,
-// which only the leader performs, and tells it again when it frees it. On
-// b:
+// The leader of the lock's group tells the node that took it, an effect
+// of the machine, which only the leader performs, and tells it again when
+// it frees it. On b:
 //
 //	lock printer
 //	held by a@localhost, token 1
 //
-// Stop any one node, the leader too: the other two still know who holds
-// printer, and give locks. Back, from its disk, the node catches up. A
-// holder that dies keeps its locks: a real service would free them, after
-// a lease the holder did not renew.
+// groups tells where each group is led:
+//
+//	groups
+//	locks/0   led by b@localhost, term 1, 2 locks held
+//	locks/1   led by a@localhost, term 1, 1 locks held
+//	…
+//	groups led: a@localhost 2, b@localhost 3, c@localhost 3
+//
+// Stop any one node: the groups it led elect leaders on the other two, in
+// a later term, which still know who holds each lock, and give locks.
+// Back, from its disk, the node catches up. A holder that dies keeps its
+// locks: a real service would free them, after a lease the holder did not
+// renew.
 package main
 
 import (
@@ -60,6 +75,7 @@ func main() {
 	nodes := flag.String("nodes", "a@localhost=127.0.0.1:4390,b@localhost=127.0.0.1:4391,c@localhost=127.0.0.1:4392",
 		"the nodes of the group, as name=address, comma separated")
 	dir := flag.String("dir", "locks-data", "directory of the logs, one per node")
+	groups := flag.Int("groups", 8, "how many groups the locks spread over, the same on every node")
 	flag.Parse()
 
 	addrs := parseNodes(*nodes)
@@ -74,11 +90,12 @@ func main() {
 	}
 	defer d.Stop()
 
-	app, err := startLocks(context.Background(), n, filepath.Join(*dir, *name), startDisplay(n, os.Stdout))
+	svc := Service{Nodes: slices.Sorted(maps.Keys(addrs)), Groups: *groups}
+	app, err := startLocks(context.Background(), n, svc, filepath.Join(*dir, *name), startDisplay(n, os.Stdout))
 	if err != nil {
 		log.Fatal(err)
 	}
-	go console{n: n, nodes: slices.Sorted(maps.Keys(addrs)), out: os.Stdout}.run(os.Stdin)
+	go console{n: n, svc: svc, out: os.Stdout}.run(os.Stdin)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
