@@ -58,6 +58,8 @@ type replica[S any] struct {
 	idle    int      // the beats in a row with nothing to do, as the leader
 	unheard []string // the nodes silent or down, as dist tells
 
+	incoming receiving // the snapshot coming from the leader, as a follower
+
 	seq    uint64 // of the last write to the storage
 	saved  uint64 // seq of the last write known durable
 	stable uint64 // the last index of the log known durable
@@ -72,7 +74,10 @@ type peer struct {
 
 	heardIn uint64 // the round of the check the leader last heard from it in
 	read    uint64 // the last round of confirming reads it answered
-	sending uint64 // the index of the snapshot on its way to it, if not 0
+	sending uint64 // the index of the snapshot it is sent, if not 0
+	data    []byte // that snapshot, encoded
+	offset  int    // how much of it the member has
+	chunkIn uint64 // the round of the check the leader last sent it a chunk in
 }
 
 // pending is a command the leader appended, to reply to once applied.
@@ -196,13 +201,8 @@ func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.E
 		if node, lost, ok := nodeLost(e.Msg); ok {
 			return b.nodeEvent(r, d, node, lost)
 		}
-		if m, ok := e.Msg.(actor.Down); ok {
-			switch tag := m.Tag.(type) {
-			case watchLeader:
-				return b.leaderDown(r, d, m)
-			case snapshotTo:
-				return b.snapshotLost(r, d, tag)
-			}
+		if m, ok := e.Msg.(actor.Down); ok && m.Tag == (watchLeader{}) {
+			return b.leaderDown(r, d, m)
 		}
 		return b.message(r, d, e.Msg)
 	}
@@ -276,6 +276,8 @@ func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, rep
 		return b.appendReply(r, d, m)
 	case installSnapshot:
 		return b.installSnapshot(r, d, m)
+	case snapshotAck:
+		return b.snapshotAck(r, d, m)
 	case timeoutNow:
 		return b.timeoutNow(r, d, m)
 	}
@@ -286,6 +288,7 @@ func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, rep
 // and knows no leader yet.
 func (d *replica[S]) newTerm(term uint64) {
 	d.term, d.votedFor, d.leader = term, proc.PID{}, proc.PID{}
+	d.incoming = receiving{}
 }
 
 // others returns the members other than this one.

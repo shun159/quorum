@@ -73,7 +73,7 @@ func unfounded(t *testing.T, seed uint64, members []string, machine func(node st
 	}
 	for _, m := range members {
 		g.storage[m] = &memStorage{}
-		g.specs[m] = Spec[int, int, int]{Group: g.name, Machine: machine(m), Storage: g.storage[m], SnapshotEvery: snapshotEvery}
+		g.specs[m] = Spec[int, int, int]{Group: g.name, Machine: machine(m), Storage: g.storage[m], SnapshotEvery: snapshotEvery, chunk: 64}
 		g.start(m)
 	}
 	return g

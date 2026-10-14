@@ -53,7 +53,12 @@ func TestInstallSnapshot(t *testing.T) {
 		b, d := member(t)
 		d = withCommands(d, 4)
 		snap := Snapshot{Index: 3, Term: c.term, Config: d.config, State: 7}
-		_, d, _ = b.HandleEvent(follower, d, genstatem.Info{Msg: installSnapshot{Term: 2, Leader: ida, To: idb, Snapshot: snap}})
+		data, err := (&replica[int]{snapshot: snap}).encodedSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := installSnapshot{Term: 2, Leader: ida, To: idb, Index: 3, Size: len(data), Data: data}
+		_, d, _ = b.HandleEvent(follower, d, genstatem.Info{Msg: m})
 		if d.log.start != 3 || d.log.lastIndex() != c.wantEnd || d.state != 7 || d.applied != 3 {
 			t.Errorf("%s: log from %d to %d, state %d applied to %d; want to %d, 7 applied to 3",
 				c.name, d.log.start, d.log.lastIndex(), d.state, d.applied, c.wantEnd)
@@ -61,46 +66,118 @@ func TestInstallSnapshot(t *testing.T) {
 	}
 }
 
-// The leader sends its snapshot once, not each beat until it arrives, nor
-// for a reply sent before it did; again if the member dies meanwhile.
+// The leader sends a chunk once, not each beat until it is answered, nor
+// for a reply sent before; again if unanswered for an election timeout.
 func TestSnapshotOnItsWay(t *testing.T) {
 	b, d := leading(t)
 	b.spec.SnapshotEvery = 1
 	b.takeSnapshot(&d)
 	d.peers[0] = peer{id: ida, next: 1}
-	snapshots := func(ev genstatem.Event) int {
-		t.Helper()
+	beat := genstatem.StateTimeout{}
+	for i, c := range []struct {
+		name   string
+		rounds uint64 // of the check of the quorum, before
+		ev     genstatem.Event
+		want   int
+	}{
+		{"first beat", 0, beat, 1},
+		{"next beat", 0, beat, 0},
+		{"stale reply", 0, genstatem.Info{Msg: appendReply{Term: 1, From: ida}}, 0},
+		{"beat within the timeout", checksPerTimeout - 1, beat, 0},
+		{"beat after", 1, beat, 1},
+		{"arrived", 0, genstatem.Info{Msg: appendReply{Term: 1, From: ida, Success: true, Match: 2}}, 0},
+	} {
+		d.round += c.rounds
 		var effs []actor.Effect
-		_, d, effs = b.HandleEvent(leader, d, ev)
+		_, d, effs = b.HandleEvent(leader, d, c.ev)
 		n := 0
 		for _, m := range sent(effs) {
 			if _, ok := m.(installSnapshot); ok {
 				n++
 			}
 		}
-		return n
-	}
-	beat := genstatem.StateTimeout{}
-	stale := genstatem.Info{Msg: appendReply{Term: 1, From: ida}}
-	lost := genstatem.Info{Msg: actor.Down{Tag: snapshotTo{ida}}}
-	arrived := genstatem.Info{Msg: appendReply{Term: 1, From: ida, Success: true, Match: 2}}
-	for i, c := range []struct {
-		name string
-		ev   genstatem.Event
-		want int
-	}{
-		{"first beat", beat, 1},
-		{"next beat", beat, 0},
-		{"stale reply", stale, 0},
-		{"member died", lost, 0},
-		{"beat after", beat, 1},
-		{"arrived", arrived, 0},
-	} {
-		if n := snapshots(c.ev); n != c.want {
-			t.Errorf("%d %s: %d snapshots sent, want %d", i, c.name, n, c.want)
+		if n != c.want {
+			t.Errorf("%d %s: %d chunks sent, want %d", i, c.name, n, c.want)
 		}
 	}
 	if p := d.peer(ida); p.sending != 0 || p.match != 2 {
 		t.Errorf("after it arrived: sending %d, match %d; want 0, 2", p.sending, p.match)
+	}
+}
+
+// A snapshot goes in chunks, each once the member has the one before;
+// the member installs it with the last.
+func TestSnapshotInChunks(t *testing.T) {
+	bl, ld := leading(t)
+	bl.spec.chunk, bl.spec.SnapshotEvery = 16, 1
+	ld.id, ld.leader = idc, idc
+	ld.sessions = Sessions{Open: map[uint64]Session{1: {}}}
+	bl.takeSnapshot(&ld)
+	ld.peers = []peer{{id: idb, next: 1}} // a, up to date, left out
+	bf, fd := member(t)
+
+	var effs []actor.Effect
+	_, ld, effs = bl.HandleEvent(leader, ld, genstatem.StateTimeout{})
+	chunks := 0
+	for {
+		msgs := sent(effs)
+		if len(msgs) != 1 {
+			t.Fatalf("after %d chunks, sent %v", chunks, msgs)
+		}
+		m, ok := msgs[0].(installSnapshot)
+		if !ok {
+			t.Fatalf("after %d chunks, the leader sent %T", chunks, msgs[0])
+		}
+		chunks++
+		_, fd, effs = bf.HandleEvent(follower, fd, genstatem.Info{Msg: m})
+		if len(fd.held) > 0 { // the snapshot saved
+			effs, fd.held, fd.saved = fd.held[0].effs, nil, fd.seq
+		}
+		reply := sent(effs)
+		if len(reply) != 1 {
+			t.Fatalf("chunk %d: the member sent %v", chunks, reply)
+		}
+		_, ld, effs = bl.HandleEvent(leader, ld, genstatem.Info{Msg: reply[0]})
+		if _, ok := reply[0].(appendReply); ok {
+			break
+		}
+	}
+	data, _ := ld.encodedSnapshot()
+	if want := (len(data) + 15) / 16; chunks != want || want < 2 {
+		t.Errorf("%d chunks, want %d of the %d bytes", chunks, want, len(data))
+	}
+	if fd.state != 3 || fd.applied != 2 || len(fd.sessions.Open) != 1 || fd.incoming.data != nil {
+		t.Errorf("member: state %d applied to %d, %d sessions, %d bytes kept; want 3 to 2, 1, none",
+			fd.state, fd.applied, len(fd.sessions.Open), len(fd.incoming.data))
+	}
+	if p := ld.peer(idb); p.match != 2 || p.sending != 0 || p.data != nil {
+		t.Errorf("leader: match %d, sending %d, %d bytes kept; want 2, 0, none", p.match, p.sending, len(p.data))
+	}
+}
+
+// A member tells how much of a snapshot it has, whatever chunk comes: one
+// sent again keeps what it has; one of another, it has none of, unless the
+// first.
+func TestReceiveChunks(t *testing.T) {
+	_, d := member(t)
+	chunk := func(leader proc.PID, index uint64, offset int) installSnapshot {
+		return installSnapshot{Leader: leader, Index: index, Offset: offset, Size: 8, Data: []byte{1, 2}}
+	}
+	for i, c := range []struct {
+		name string
+		m    installSnapshot
+		want int
+	}{
+		{"first", chunk(ida, 5, 0), 2},
+		{"next", chunk(ida, 5, 2), 4},
+		{"first again", chunk(ida, 5, 0), 4},
+		{"skipping one", chunk(ida, 5, 6), 4},
+		{"of another snapshot", chunk(ida, 6, 4), 0},
+		{"of another leader", chunk(idc, 5, 4), 0},
+		{"first of another", chunk(idc, 7, 0), 2},
+	} {
+		if has := d.receive(c.m); has != c.want {
+			t.Errorf("%d %s: has %d, want %d", i, c.name, has, c.want)
+		}
 	}
 }

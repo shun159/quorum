@@ -16,6 +16,8 @@ type Spec[S, Cmd, Rep any] struct {
 	SessionTimeout  time.Duration
 	Quiet           time.Duration // negative: never
 	Storage         Storage       // nil keeps all in memory
+
+	chunk int // the size of the chunks of a snapshot sent, for tests
 }
 
 // DefaultElectionTimeout is Spec.ElectionTimeout when zero.
@@ -43,6 +45,9 @@ func (spec Spec[S, Cmd, Rep]) withDefaults() Spec[S, Cmd, Rep] {
 	}
 	if spec.SessionTimeout == 0 {
 		spec.SessionTimeout = DefaultSessionTimeout
+	}
+	if spec.chunk == 0 {
+		spec.chunk = snapshotChunk
 	}
 	if spec.Quiet == 0 {
 		spec.Quiet = spec.ElectionTimeout

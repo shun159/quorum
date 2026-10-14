@@ -43,11 +43,6 @@ func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
 	for _, rd := range d.reads {
 		effs = append(effs, actor.Reply{To: rd.from, Value: redirect{}}) // to read again
 	}
-	for _, p := range d.peers {
-		if p.sending != 0 {
-			effs = append(effs, actor.Demonitor{Tag: snapshotTo{p.id}})
-		}
-	}
 	d.pending, d.joining, d.reads, d.peers = nil, nil, nil, nil
 	if l, ok := b.spec.Machine.(Leader[S]); ok {
 		effs = append(effs, l.Surrendered(d.state)...)
@@ -131,17 +126,15 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 	}
 	d.heard(p)
 	p.read = max(p.read, m.Read)
-	effs := p.snapshotArrived(m)
+	p.snapshotArrived(m)
 	if !m.Success {
 		p.next = max(1, min(p.next-1, m.LastIndex+1))
-		effs = append(effs, b.serveReads(&d)...)
-		return r, d, append(effs, b.appendTo(&d, *p)...)
+		return r, d, append(b.serveReads(&d), b.appendTo(&d, *p)...)
 	}
 	p.match = max(p.match, m.Match)
 	p.next = max(p.next, p.match+1)
 	progress := *p
-	effs = append(effs, b.serveReads(&d)...)
-	effs = append(effs, b.commit(r, &d)...)
+	effs := append(b.serveReads(&d), b.commit(r, &d)...)
 	if progress.next <= d.log.lastIndex() {
 		effs = append(effs, b.appendTo(&d, progress)...)
 	}
