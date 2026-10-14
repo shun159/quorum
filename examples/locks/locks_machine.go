@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
-	"maps"
+	"time"
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/dist"
@@ -18,20 +18,23 @@ type Locks struct {
 	Last uint64 // the last token given
 }
 
-// Holder is who holds a lock, and the token it was given with it. Tokens
-// only grow: a store the holder writes to can refuse a token older than
-// one it has seen, as from a holder that lost the lock while it paused.
+// Holder is who holds a lock, the token it was given with it, and when
+// its lease expires, in UnixNano, unless renewed. Tokens only grow: a
+// store the holder writes to can refuse a token older than one it has
+// seen, as from a holder that lost the lock while it paused.
 type Holder struct {
-	Owner string
-	Token uint64
+	Owner   string
+	Token   uint64
+	Expires int64
 }
 
-// Op is a command to a group: lock, unlock, ask who holds a lock, or how
-// many are held.
+// Op is a command to a group: lock, for Lease, or renew; unlock; ask who
+// holds a lock, or how many are held.
 type Op struct {
 	Kind  Kind
 	Name  string
 	Owner string
+	Lease time.Duration
 }
 
 type Kind uint8
@@ -52,12 +55,12 @@ type Reply struct {
 }
 
 func init() {
-	dist.Register(Op{}, Reply{}, Locks{}, Granted{}, Released{}, Leading{}, Following{}, leadsReq{}, Leads{})
+	dist.Register(Op{}, Reply{}, Locks{}, Granted{}, Released{}, Lost{}, Leading{}, Following{}, leadsReq{}, Leads{})
 }
 
-// machine is the quorum.Machine of the locks of group, a quorum.Reader,
-// and a quorum.Leader: it tells the holder of its node when the node
-// leads the group, and when no more.
+// machine is the quorum.Machine of the locks of group: Timed and a
+// TimedReader, for leases, and a quorum.Leader, telling the holder of its
+// node when the node leads the group, and when no more.
 type machine struct{ group string }
 
 func (machine) Init() Locks { return Locks{} }
@@ -70,39 +73,66 @@ func (m machine) Surrendered(Locks) []actor.Effect {
 	return actor.Do(actor.Send{To: holderName, Msg: Following{m.group}})
 }
 
-func (machine) Apply(l Locks, op Op) (Locks, Reply, []actor.Effect) {
+func (m machine) Apply(l Locks, op Op) (Locks, Reply, []actor.Effect) {
+	return m.ApplyAt(l, op, time.Time{}) // ApplyAt is called instead
+}
+
+func (m machine) Read(l Locks, op Op) Reply {
+	return m.ReadAt(l, op, time.Time{}) // ReadAt is called instead
+}
+
+func (machine) ApplyAt(l Locks, op Op, at time.Time) (Locks, Reply, []actor.Effect) {
 	switch op.Kind {
 	case Acquire:
-		return l.lock(op.Name, op.Owner)
+		return l.lock(op.Name, op.Owner, at.Add(op.Lease).UnixNano(), at.UnixNano())
 	case Release:
 		return l.unlock(op.Name, op.Owner)
 	}
 	return l, Reply{}, nil
 }
 
-func (machine) Read(l Locks, op Op) Reply {
+// ReadAt answers who holds a lock, or how many are held, at: a lease
+// expired is held no more.
+func (machine) ReadAt(l Locks, op Op, at time.Time) Reply {
+	now := at.UnixNano()
 	if op.Kind == Count {
-		return Reply{Count: len(l.Held)}
+		n := 0
+		for _, h := range l.Held {
+			if h.Expires > now {
+				n++
+			}
+		}
+		return Reply{Count: n}
 	}
 	h, ok := l.Held[op.Name]
-	return Reply{Holder: h, OK: ok}
+	if !ok || h.Expires <= now {
+		return Reply{}
+	}
+	return Reply{Holder: h, OK: true}
 }
 
-// lock gives the lock name to owner with a new token, if no one holds it,
-// and tells the holder of the node of owner. Its holder asking again keeps
-// it, with the same token.
-func (l Locks) lock(name, owner string) (Locks, Reply, []actor.Effect) {
-	if h, ok := l.Held[name]; ok {
-		return l, Reply{Holder: h, OK: h.Owner == owner}, nil
+// lock gives the lock name to owner with a new token, until expires, if
+// no one holds it, or its lease expired at now, and tells the holder of
+// the node of owner, and of the one that lost it. Its holder asking again
+// renews it, with the same token.
+func (l Locks) lock(name, owner string, expires, now int64) (Locks, Reply, []actor.Effect) {
+	h, held := l.Held[name]
+	switch {
+	case held && h.Owner == owner:
+		h.Expires = max(h.Expires, expires)
+		l.Held = with(l.Held, name, h)
+		return l, Reply{Holder: h, OK: true}, nil
+	case held && h.Expires > now:
+		return l, Reply{Holder: h}, nil
+	}
+	var effs []actor.Effect
+	if held {
+		effs = append(effs, actor.Send{To: holderAt(h.Owner), Msg: Lost{name, h.Token}})
 	}
 	l.Last++
-	h := Holder{Owner: owner, Token: l.Last}
-	l.Held = maps.Clone(l.Held)
-	if l.Held == nil {
-		l.Held = map[string]Holder{}
-	}
-	l.Held[name] = h
-	return l, Reply{Holder: h, OK: true}, actor.Do(actor.Send{To: holderAt(owner), Msg: Granted{name, h.Token}})
+	h = Holder{Owner: owner, Token: l.Last, Expires: expires}
+	l.Held = with(l.Held, name, h)
+	return l, Reply{Holder: h, OK: true}, append(effs, actor.Send{To: holderAt(owner), Msg: Granted{name, h.Token}})
 }
 
 // unlock frees the lock name, if owner holds it, and tells the holder of
@@ -112,8 +142,7 @@ func (l Locks) unlock(name, owner string) (Locks, Reply, []actor.Effect) {
 	if !ok || h.Owner != owner {
 		return l, Reply{Holder: h}, nil
 	}
-	l.Held = maps.Clone(l.Held)
-	delete(l.Held, name)
+	l.Held = without(l.Held, name)
 	return l, Reply{OK: true}, actor.Do(actor.Send{To: holderAt(owner), Msg: Released{name, h.Token}})
 }
 
@@ -123,6 +152,7 @@ func (l Locks) unlock(name, owner string) (Locks, Reply, []actor.Effect) {
 type Service struct {
 	Nodes  []string
 	Groups int
+	Lease  time.Duration // of a lock, renewed by the holder of its node
 }
 
 // group returns the name of the group i.
@@ -155,9 +185,10 @@ func (s Service) Found(ctx context.Context, caller actor.Caller) error {
 	return nil
 }
 
-// Lock has owner take the lock name.
+// Lock has owner take the lock name, for a lease; owner holding it, it
+// renews the lease.
 func (s Service) Lock(ctx context.Context, caller actor.Caller, name, owner string) (Reply, error) {
-	return quorum.Command[Reply](ctx, caller, s.groupOf(name), s.Nodes, Op{Kind: Acquire, Name: name, Owner: owner})
+	return quorum.Command[Reply](ctx, caller, s.groupOf(name), s.Nodes, Op{Kind: Acquire, Name: name, Owner: owner, Lease: s.Lease})
 }
 
 // Unlock has owner free the lock name.

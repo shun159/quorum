@@ -48,9 +48,14 @@
 //
 // Stop any one node: the groups it led elect leaders on the other two, in
 // a later term, which still know who holds each lock, and give locks.
-// Back, from its disk, the node catches up. A holder that dies keeps its
-// locks: a real service would free them, after a lease the holder did not
-// renew.
+// Back, from its disk, the node catches up.
+//
+// A lock lasts for a lease, ten seconds by default, which the node holding
+// it renews: a node lost, its locks expire, by the time of the groups'
+// logs, the same for all, and another node takes them, with a later
+// token. Back, the node that held them is told:
+//
+//	*** this node lost the lock "printer", its lease expired
 package main
 
 import (
@@ -76,6 +81,7 @@ func main() {
 		"the nodes of the group, as name=address, comma separated")
 	dir := flag.String("dir", "locks-data", "directory of the logs, one per node")
 	groups := flag.Int("groups", 8, "how many groups the locks spread over, the same on every node")
+	lease := flag.Duration("lease", 10*time.Second, "how long a lock lasts unless its node renews it")
 	flag.Parse()
 
 	addrs := parseNodes(*nodes)
@@ -90,7 +96,7 @@ func main() {
 	}
 	defer d.Stop()
 
-	svc := Service{Nodes: slices.Sorted(maps.Keys(addrs)), Groups: *groups}
+	svc := Service{Nodes: slices.Sorted(maps.Keys(addrs)), Groups: *groups, Lease: *lease}
 	app, err := startLocks(context.Background(), n, svc, filepath.Join(*dir, *name), startDisplay(n, os.Stdout))
 	if err != nil {
 		log.Fatal(err)

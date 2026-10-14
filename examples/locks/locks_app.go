@@ -14,6 +14,6 @@ import (
 func startLocks(ctx context.Context, n *proc.Node, s Service, dir string, display proc.PID) (*application.Running, error) {
 	return application.Start(ctx, n, application.App{
 		Name:  "locks",
-		Start: supervisor.Child(locksSup(s, dir, display)),
+		Start: supervisor.Child(locksSup(s, n.Name(), dir, display)),
 	})
 }

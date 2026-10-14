@@ -13,13 +13,13 @@ import (
 // locksSup is the top supervisor of the application: the groups, and the
 // holder of the node, showing on display what the node holds and leads.
 // Either restarts alone.
-func locksSup(s Service, dir string, display proc.PID) supervisor.Spec {
+func locksSup(s Service, node, dir string, display proc.PID) supervisor.Spec {
 	return supervisor.Spec{
 		Strategy:  supervisor.OneForOne,
 		Intensity: 5,
 		Children: []supervisor.ChildSpec{
 			{ID: "locks_groups", Start: supervisor.Child(groupsSup(s, dir))},
-			{ID: "locks_holder", Start: genserver.Child(holder{Display: display}, actor.WithName(holderName))},
+			{ID: "locks_holder", Start: genserver.Child(holder{Display: display, Svc: s, Node: node}, actor.WithName(holderName))},
 		},
 	}
 }

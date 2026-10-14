@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,39 +16,52 @@ import (
 	"github.com/shun159/molecule/proc"
 )
 
-// The machine gives a lock to one owner at a time, each time with a
-// larger token.
+// The machine gives a lock to one owner at a time, for a lease its owner
+// renews, then to another, with a larger token, once it expired; the
+// holders of the nodes are told.
 func TestMachine(t *testing.T) {
 	m := machine{"locks/0"}
 	l := m.Init()
+	t0 := time.Unix(1000, 0)
+	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
+	exp := func(s int) int64 { return at(s).UnixNano() }
+	const lease = 10 * time.Second
 	steps := []struct {
 		op   Op
+		at   int
 		want Reply
+		effs []actor.Effect
 	}{
-		{Op{Acquire, "printer", "a"}, Reply{Holder: Holder{"a", 1}, OK: true}},
-		{Op{Acquire, "printer", "b"}, Reply{Holder: Holder{"a", 1}, OK: false}},
-		{Op{Acquire, "printer", "a"}, Reply{Holder: Holder{"a", 1}, OK: true}}, // again, the same token
-		{Op{Release, "printer", "b"}, Reply{Holder: Holder{"a", 1}, OK: false}},
-		{Op{Release, "printer", "a"}, Reply{OK: true}},
-		{Op{Acquire, "printer", "b"}, Reply{Holder: Holder{"b", 2}, OK: true}},
+		{Op{Acquire, "printer", "a", lease}, 0, Reply{Holder: Holder{"a", 1, exp(10)}, OK: true},
+			actor.Do(actor.Send{To: holderAt("a"), Msg: Granted{"printer", 1}})},
+		{Op{Acquire, "printer", "b", lease}, 5, Reply{Holder: Holder{"a", 1, exp(10)}}, nil},
+		{Op{Acquire, "printer", "a", lease}, 8, Reply{Holder: Holder{"a", 1, exp(18)}, OK: true}, nil}, // renewed
+		{Op{Acquire, "printer", "b", lease}, 15, Reply{Holder: Holder{"a", 1, exp(18)}}, nil},
+		{Op{Acquire, "printer", "b", lease}, 19, Reply{Holder: Holder{"b", 2, exp(29)}, OK: true},
+			actor.Do(actor.Send{To: holderAt("a"), Msg: Lost{"printer", 1}}, actor.Send{To: holderAt("b"), Msg: Granted{"printer", 2}})},
+		{Op{Kind: Release, Name: "printer", Owner: "a"}, 20, Reply{Holder: Holder{"b", 2, exp(29)}}, nil},
 	}
 	for i, s := range steps {
 		var got Reply
-		l, got, _ = m.Apply(l, s.op)
-		if got != s.want {
-			t.Fatalf("step %d, %+v: %+v, want %+v", i, s.op, got, s.want)
+		var effs []actor.Effect
+		l, got, effs = m.ApplyAt(l, s.op, at(s.at))
+		if got != s.want || !slices.Equal(effs, s.effs) {
+			t.Fatalf("step %d, %+v: %+v, %v; want %+v, %v", i, s.op, got, effs, s.want, s.effs)
 		}
 	}
-	// The holder of the node of the owner is told, once.
-	_, _, effs := m.Apply(l, Op{Release, "printer", "b"})
-	if len(effs) != 1 || effs[0] != (actor.Send{To: holderAt("b"), Msg: Released{"printer", 2}}) {
-		t.Errorf("release: %v", effs)
+	who := Op{Kind: Query, Name: "printer"}
+	if got := m.ReadAt(l, who, at(28)); got != (Reply{Holder: Holder{"b", 2, exp(29)}, OK: true}) {
+		t.Errorf("read before the lease expires: %+v", got)
 	}
-	if _, _, effs := m.Apply(l, Op{Acquire, "printer", "b"}); len(effs) != 0 {
-		t.Errorf("acquire again: %v", effs)
+	if got := m.ReadAt(l, who, at(29)); got != (Reply{}) {
+		t.Errorf("read once it expired: %+v", got)
 	}
-	if got := m.Read(l, Op{Kind: Query, Name: "printer"}); got != (Reply{Holder: Holder{"b", 2}, OK: true}) {
-		t.Errorf("read: %+v", got)
+	if got := m.ReadAt(l, Op{Kind: Count}, at(28)); got.Count != 1 {
+		t.Errorf("count: %+v", got)
+	}
+	_, got, effs := m.ApplyAt(l, Op{Kind: Release, Name: "printer", Owner: "b"}, at(21))
+	if !got.OK || !slices.Equal(effs, actor.Do(actor.Send{To: holderAt("b"), Msg: Released{"printer", 2}})) {
+		t.Errorf("release: %+v, %v", got, effs)
 	}
 }
 
@@ -55,6 +69,7 @@ func TestMachine(t *testing.T) {
 // localhost, each keeping its log in a directory of its own.
 type cluster struct {
 	t     *testing.T
+	svc   Service
 	dir   string
 	mu    sync.Mutex
 	addrs map[string]string // where each node listens
@@ -70,11 +85,12 @@ type node struct {
 
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
 
-// svc is the service of the tests: its locks over eight groups.
-var svc = Service{Nodes: names, Groups: 8}
+// svc is the service of the tests: its locks over eight groups, for a
+// lease longer than the tests.
+var svc = Service{Nodes: names, Groups: 8, Lease: time.Minute}
 
-func newCluster(t *testing.T) *cluster {
-	c := &cluster{t: t, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
+func newCluster(t *testing.T, s Service) *cluster {
+	c := &cluster{t: t, svc: s, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
 	for _, name := range names {
 		c.start(name)
 	}
@@ -98,7 +114,7 @@ func (c *cluster) start(name string) {
 	c.addrs[name] = d.Addr().String()
 	c.mu.Unlock()
 	ls := make(lines, 100)
-	app, err := startLocks(context.Background(), n, svc, filepath.Join(c.dir, name), startDisplay(n, ls))
+	app, err := startLocks(context.Background(), n, c.svc, filepath.Join(c.dir, name), startDisplay(n, ls))
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -138,8 +154,8 @@ func (c *cluster) allLed(n *proc.Node, down string) {
 	var out strings.Builder
 	for range 50 {
 		out.Reset()
-		console{n: n, svc: svc, out: &out}.groups()
-		if strings.Count(out.String(), "led by") == svc.Groups && !strings.Contains(out.String(), "led by "+down) {
+		console{n: n, svc: c.svc, out: &out}.groups()
+		if strings.Count(out.String(), "led by") == c.svc.Groups && !strings.Contains(out.String(), "led by "+down) {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -174,7 +190,7 @@ func ctx(t *testing.T) context.Context {
 // group is led, by the nodes up. The node of the owner of a lock shows it,
 // held and released.
 func TestLocks(t *testing.T) {
-	c := newCluster(t)
+	c := newCluster(t, svc)
 	a := c.nodes[names[0]].n
 	if err := svc.Found(ctx(t), a); err != nil {
 		t.Fatal(err)
@@ -188,7 +204,7 @@ func TestLocks(t *testing.T) {
 	for i, down := range names {
 		c.stop(down)
 		up := c.nodes[names[(i+1)%len(names)]].n
-		if r, err := svc.Who(ctx(t), up, "printer"); err != nil || r.Holder != (Holder{a.Name(), 1}) {
+		if r, err := svc.Who(ctx(t), up, "printer"); err != nil || r.Holder.Owner != a.Name() || r.Holder.Token != 1 {
 			t.Fatalf("%s down: who holds printer: %+v, %v", down, r, err)
 		}
 		if r, err := svc.Lock(ctx(t), up, "printer", "bob"); err != nil || r.OK {
@@ -213,4 +229,31 @@ func TestLocks(t *testing.T) {
 		t.Fatalf("unlock scanner: %+v, %v", r, err)
 	}
 	c.see(a.Name(), `*** this node freed the lock "scanner"`)
+}
+
+// A lock lasts while the node of its owner renews its lease: once the
+// node is down, it expires, and another node takes it, with a later token.
+func TestLease(t *testing.T) {
+	s := svc
+	s.Lease = 600 * time.Millisecond
+	c := newCluster(t, s)
+	a, b := c.nodes[names[0]].n, c.nodes[names[1]].n
+	if err := s.Found(ctx(t), a); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.Lock(ctx(t), a, "printer", a.Name())
+	if err != nil || !r.OK {
+		t.Fatalf("lock: %+v, %v", r, err)
+	}
+	time.Sleep(4 * s.Lease) // renewed meanwhile
+	if r, err := s.Lock(ctx(t), b, "printer", b.Name()); err != nil || r.OK || r.Holder.Owner != a.Name() {
+		t.Fatalf("renewed, b locked: %+v, %v", r, err)
+	}
+	c.stop(names[0])
+	time.Sleep(2 * s.Lease)
+	r, err = s.Lock(ctx(t), b, "printer", b.Name())
+	if err != nil || !r.OK || r.Holder.Token != 2 {
+		t.Fatalf("expired, b locked: %+v, %v", r, err)
+	}
+	c.see(b.Name(), `*** this node holds the lock "printer", token 2`)
 }
