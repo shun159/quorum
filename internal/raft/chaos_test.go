@@ -225,13 +225,14 @@ func (g *group) checkSwapped(seed uint64) {
 	}
 }
 
-// disturb may cut a member or two off the others; or crash one amid the
-// steps to come, its storage keeping some of the writes it did not know
-// were durable; or replace the disk of one, for the operator to swap its
-// member; or have the leader hand over to one.
+// disturb may cut a member or two off the others, the connections lost
+// or silent; or crash one amid the steps to come, its storage keeping
+// some of the writes it did not know were durable; or replace the disk of
+// one, for the operator to swap its member; or have the leader hand over
+// to one; or pause one, the leader more often than not.
 func (g *group) disturb(r *rand.Rand) {
 	members := g.members
-	switch r.IntN(6) {
+	switch r.IntN(8) {
 	case 0: // all well
 	case 1:
 		i := r.IntN(len(members))
@@ -252,6 +253,15 @@ func (g *group) disturb(r *rand.Rand) {
 		if l, ok := g.anyLeader(); ok {
 			g.s.Call(g.at(l), transferLeader{To: members[r.IntN(len(members))]})
 		}
+	case 6:
+		i := r.IntN(len(members))
+		g.s.Silence(members[i:i+1], without(members, i))
+	case 7:
+		m := members[r.IntN(len(members))]
+		if l, ok := g.anyLeader(); ok && r.IntN(2) == 0 {
+			m = l
+		}
+		g.s.Pause(m)
 	}
 }
 
@@ -266,10 +276,14 @@ func (g *group) replaceDisk(m string) {
 	g.s.Cast(g.op, swap{m})
 }
 
-// recover heals the partitions, and restarts the members crashed.
+// recover heals the partitions and silences, resumes the members paused,
+// and restarts those crashed.
 func (g *group) recover() {
 	g.due = nil
 	g.s.Heal()
+	for _, m := range g.members {
+		g.s.Resume(m)
+	}
 	for _, m := range g.members {
 		if _, _, ok := g.member(m); !ok {
 			g.restart(m)

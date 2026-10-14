@@ -65,8 +65,13 @@ type nextOp struct{}
 
 func (u user) WithClock(now func() time.Time) any { u.now = now; return u }
 
+// userTimeout is short, for a user to ask another member, and another,
+// while the leader is paused: a member it asks again may be the leader,
+// which answers once it resumes, before it learns that another leads.
+const userTimeout = 100 * time.Millisecond
+
 func (u user) Init(proc.PID) (history, []actor.Effect, error) {
-	return history{client: NewClient[int, int](u.group, u.members, time.Second)}, actor.Do(u.later()), nil
+	return history{client: NewClient[int, int](u.group, u.members, userTimeout)}, actor.Do(u.later()), nil
 }
 
 // later has the user do its next operation in a while.
@@ -156,8 +161,8 @@ func operations(history []op) []porcupine.Operation {
 }
 
 // TestLinearizable has users write and read a register, while members are
-// cut off or crashed at random, and messages lost, as in TestChaos, and
-// checks that the history is linearizable.
+// cut off or crashed at random, and messages lost, as in TestChaos, the
+// leader paused as often, and checks that the history is linearizable.
 func TestLinearizable(t *testing.T) {
 	for seed := range uint64(30) {
 		linearizable(t, seed)
@@ -179,7 +184,11 @@ func linearizable(t *testing.T, seed uint64, opts ...gensim.Option) {
 	r := rand.New(rand.NewPCG(seed, 7))
 	for range 20 {
 		g.recover()
-		g.disturb(r)
+		if l, ok := g.anyLeader(); ok && r.IntN(2) == 0 { // its reads tested
+			g.s.Pause(l)
+		} else {
+			g.disturb(r)
+		}
 		g.run(time.Duration(200+r.IntN(800)) * time.Millisecond)
 	}
 	var all []op
