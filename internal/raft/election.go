@@ -43,14 +43,17 @@ func (b behaviour[S, Cmd, Rep]) stand(d replica[S]) (role, replica[S], []actor.E
 	return candidate, d, append(effs, d.after(asks...)...)
 }
 
-// requestVote answers a candidate. A voter votes once in a term, for a
+// requestVote answers a candidate. A member votes once in a term, for a
 // candidate whose log its own is not ahead of, and then waits for that
 // candidate to win before standing itself. It answers once its vote is
-// saved: restarted, it must not vote again in the term. A member not
-// voting refuses.
+// saved: restarted, it must not vote again in the term.
+//
+// It answers whatever its own configuration, as Raft's thesis has it
+// (4.2.3): the candidate counts the votes of the voters of its own. A
+// learner made a voter by entries it misses must vote all the same: the
+// candidate holding them may need its vote to lead, and to send them.
 func (b behaviour[S, Cmd, Rep]) requestVote(r role, d replica[S], m requestVote) (role, replica[S], []actor.Effect) {
 	grant := m.Term == d.term &&
-		d.config.isVoter(d.id) &&
 		(d.votedFor.IsZero() || d.votedFor == m.Candidate) &&
 		d.log.notAheadOf(m.LastIndex, m.LastTerm)
 	var effs []actor.Effect

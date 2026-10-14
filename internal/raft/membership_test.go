@@ -44,8 +44,8 @@ func TestFoundOnce(t *testing.T) {
 }
 
 // A member restarted on a new disk is another member, not in the group:
-// it neither votes nor stands, nor takes what is sent to the one before
-// it, while the group goes on without it.
+// it does not stand, nor takes what is sent to the one before it, nor
+// counts its vote for anyone, while the group goes on without it.
 func TestNewDisk(t *testing.T) {
 	g := newGroup(t, 1, three)
 	for range 3 {
@@ -62,8 +62,8 @@ func TestNewDisk(t *testing.T) {
 	if d.id == before.id || d.id.IsZero() {
 		t.Fatalf("c is %v, as before: %v", d.id, before.id)
 	}
-	if r != follower || d.log.lastIndex() != 0 || !d.votedFor.IsZero() {
-		t.Errorf("c, new: %v, log of %d, voted for %v", r, d.log.lastIndex(), d.votedFor)
+	if r != follower || d.log.lastIndex() != 0 {
+		t.Errorf("c, new: %v, log of %d", r, d.log.lastIndex())
 	}
 	if sum, err := g.command(1); err != nil || sum != 4 {
 		t.Errorf("command without c: %d, %v", sum, err)
@@ -86,16 +86,21 @@ func TestRestartWithoutStorage(t *testing.T) {
 	}
 }
 
-// A member not a voter in its configuration refuses its vote, and does
-// not stand.
-func TestNonVoterRefuses(t *testing.T) {
+// A member not a voter in its configuration does not stand, but votes,
+// and would: the candidate may hold the entries that make it a voter, and
+// need its vote to lead, and to send them.
+func TestNonVoter(t *testing.T) {
 	b, d := member(t)
 	config := Config{Voters: []proc.PID{ida, idc}, Learners: []proc.PID{idb}}
 	d.log, d.config = logOf(Entry{Config: &config}), config
 
+	_, _, effs := b.HandleEvent(follower, d, genstatem.Info{Msg: preVote{Term: 1, Candidate: ida, LastIndex: 1}})
+	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (preVoteReply{Term: 1, From: idb, Granted: true}) {
+		t.Errorf("a learner asked would: %v", msgs)
+	}
 	_, d2, effs := b.HandleEvent(follower, d, genstatem.Info{Msg: requestVote{Term: 1, Candidate: ida, LastIndex: 1}})
 	_, _, effs = b.HandleEvent(follower, d2, genstatem.Info{Msg: memDurable{written(t, effs)}})
-	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (voteReply{Term: 1, From: idb}) {
+	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (voteReply{Term: 1, From: idb, Granted: true}) {
 		t.Errorf("a learner told %v", msgs)
 	}
 	if r, _, _ := b.HandleEvent(follower, d, genstatem.StateTimeout{}); r != follower {

@@ -32,7 +32,6 @@ func (b behaviour[S, Cmd, Rep]) preStand(d replica[S]) (role, replica[S], []acto
 // not wait for a write.
 func (b behaviour[S, Cmd, Rep]) preVote(r role, d replica[S], m preVote) (role, replica[S], []actor.Effect) {
 	grant := m.Term > d.term &&
-		d.config.isVoter(d.id) &&
 		!d.hearsLeader(r) &&
 		d.log.notAheadOf(m.LastIndex, m.LastTerm)
 	reply := preVoteReply{Term: d.term, From: d.id, Granted: grant}
