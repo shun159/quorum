@@ -7,7 +7,7 @@ import (
 
 func init() {
 	dist.Register(preVote{}, preVoteReply{}, requestVote{}, voteReply{}, appendEntries{}, appendReply{},
-		command{}, read{}, applied{}, redirect{}, deposed{}, rejected{},
+		whoLeads{}, command{}, read{}, applied{}, redirect{}, deposed{}, rejected{},
 		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{},
 		installSnapshot{})
 }
@@ -92,6 +92,7 @@ func (m installSnapshot) to() proc.PID { return m.To }
 
 // A command from a client, and the replies it may get.
 type (
+	whoLeads struct{} // answered with a redirect, to the member itself if it leads
 	command  struct{ Cmd any }
 	read     struct{ Cmd any }       // answered by the leader, not appended
 	applied  struct{ Rep any }       // applied, with its reply

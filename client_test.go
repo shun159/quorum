@@ -44,29 +44,32 @@ func said(req actor.SendRequest, v any, err error) actor.Response {
 
 var noProc = &actor.ExitError{Reason: proc.NoProc}
 
-// TestClientFindsLeader has a client follow the members' answers to the
-// leader: the next member if none is there, the leader where it is said
-// to be, the next member after a pause if no leader is known yet, the
-// same member after a pause if it is busy.
+// TestClientFindsLeader has a client ask the members who leads, past
+// those down or not knowing, and send the command to the one that says it
+// does; then to it at once, the next time.
 func TestClientFindsLeader(t *testing.T) {
 	c := NewClient[int, int]("g", []string{"a", "b", "c"}, 0)
 	c, effs := c.Command("x", 1)
 	node, req := asked(t, effs)
-	if node != "a" || req.Req != (command{1}) {
+	if node != "a" || req.Req != (whoLeads{}) {
 		t.Fatalf("asked %s %#v", node, req.Req)
 	}
+	who, cmd := whoLeads{}, command{1}
 	steps := []struct {
 		answer any
 		err    error
 		node   string // asked next
+		req    any    // what
 		pause  bool   // after a pause
 	}{
-		{err: noProc, node: "b"},
-		{answer: redirect{Leader: ""}, node: "c", pause: true},
-		{answer: redirect{Leader: "b"}, node: "b"},
-		{answer: busy{}, node: "b", pause: true},
-		{err: noProc, node: "c"},
-		{err: noProc, node: "a"},
+		{err: noProc, node: "b", req: who, pause: true},
+		{answer: redirect{Leader: ""}, node: "c", req: who, pause: true},
+		{answer: redirect{Leader: "b"}, node: "b", req: who},
+		{answer: redirect{Leader: "b"}, node: "b", req: cmd},
+		{answer: busy{}, node: "b", req: cmd, pause: true},
+		{answer: redirect{Leader: "c"}, node: "c", req: who},
+		{err: proc.NoConnection, node: "a", req: who, pause: true},
+		{answer: redirect{Leader: "a"}, node: "a", req: cmd},
 	}
 	for i, s := range steps {
 		var res *Result[int]
@@ -78,8 +81,8 @@ func TestClientFindsLeader(t *testing.T) {
 			timer := waited(t, effs)
 			c, effs, _ = c.Handle(timer.Msg)
 		}
-		if node, req = asked(t, effs); node != s.node {
-			t.Fatalf("step %d: asked %s, not %s", i, node, s.node)
+		if node, req = asked(t, effs); node != s.node || req.Req != s.req {
+			t.Fatalf("step %d: asked %s %#v, not %s %#v", i, node, req.Req, s.node, s.req)
 		}
 	}
 	c, effs, res := c.Handle(said(req, applied{Rep: 7}, nil))
@@ -89,10 +92,52 @@ func TestClientFindsLeader(t *testing.T) {
 	if c.Out() != 0 {
 		t.Errorf("%d out", c.Out())
 	}
+	_, effs = c.Command("y", 2)
+	if node, req := asked(t, effs); node != "a" || req.Req != (command{2}) {
+		t.Errorf("next: asked %s %#v", node, req.Req)
+	}
+}
+
+// TestClientForgetsLeader has a client that lost the leader ask who leads
+// again, for the next command.
+func TestClientForgetsLeader(t *testing.T) {
+	c := knowingLeader("a", "b")
+	c, effs := c.Command("x", 1)
+	_, req := asked(t, effs)
+	c, _, _ = c.Handle(said(req, nil, proc.NoConnection))
+	_, effs = c.Command("y", 2)
+	if node, req := asked(t, effs); node != "a" || req.Req != (whoLeads{}) {
+		t.Errorf("asked %s %#v", node, req.Req)
+	}
+}
+
+// TestClientReadsPastDown has a read, safe to send twice, go to the next
+// member when one is down: a command would not, as it may have been
+// applied there.
+func TestClientReadsPastDown(t *testing.T) {
+	c := NewClient[int, int]("g", []string{"a", "b"}, 0)
+	c, effs := c.Read("r", 0)
+	node, req := asked(t, effs)
+	if node != "a" || req.Req != (read{0}) {
+		t.Fatalf("asked %s %#v", node, req.Req)
+	}
+	c, effs, _ = c.Handle(said(req, nil, proc.NoConnection))
+	_, effs, _ = c.Handle(waited(t, effs).Msg)
+	if node, req := asked(t, effs); node != "b" || req.Req != (read{0}) {
+		t.Errorf("then asked %s %#v", node, req.Req)
+	}
+}
+
+// knowingLeader returns a client of group g on nodes, knowing the leader on the
+// first: a command goes to it at once.
+func knowingLeader(nodes ...string) Client[int, int] {
+	c := NewClient[int, int]("g", nodes, 0)
+	c.leader = nodes[0]
+	return c
 }
 
 // TestClientErrors has commands end with the errors Command returns: not
-// asked again, as they may have been applied.
+// sent again, as they may have been applied.
 func TestClientErrors(t *testing.T) {
 	for _, tc := range []struct {
 		answer any
@@ -103,16 +148,14 @@ func TestClientErrors(t *testing.T) {
 		{err: context.DeadlineExceeded, want: context.DeadlineExceeded},
 		{err: proc.NoConnection, want: proc.NoConnection},
 	} {
-		c := NewClient[int, int]("g", []string{"a"}, 0)
-		c, effs := c.Command("x", 1)
+		c, effs := knowingLeader("a").Command("x", 1)
 		_, req := asked(t, effs)
 		_, effs, res := c.Handle(said(req, tc.answer, tc.err))
 		if len(effs) != 0 || res == nil || !errors.Is(res.Err, tc.want) {
 			t.Errorf("%#v %v: done %#v, effects %#v", tc.answer, tc.err, res, effs)
 		}
 	}
-	c := NewClient[int, int]("g", []string{"a"}, 0)
-	c, effs := c.Command("x", 1)
+	c, effs := knowingLeader("a").Command("x", 1)
 	_, req := asked(t, effs)
 	if _, _, res := c.Handle(said(req, rejected{"no"}, nil)); res == nil || res.Err == nil || res.Err.Error() != "no" {
 		t.Errorf("rejected: done %#v", res)
@@ -122,13 +165,13 @@ func TestClientErrors(t *testing.T) {
 // TestClientStale has a client drop what answers a command cancelled, or
 // an earlier attempt, and what is not its own.
 func TestClientStale(t *testing.T) {
-	c := NewClient[int, int]("g", []string{"a", "b"}, 0)
-	c, effs := c.Command("x", 1)
+	c, effs := knowingLeader("a", "b").Command("x", 1)
 	_, first := asked(t, effs)
 	c, _ = c.Cancel("x")
 	c, effs = c.Command("x", 2)
 	_, second := asked(t, effs)
-	other := NewClient[int, int]("h", []string{"a"}, 0)
+	other := knowingLeader("a")
+	other.group = "h"
 	other, effs = other.Command("x", 3)
 	_, theirs := asked(t, effs)
 
@@ -153,8 +196,7 @@ func TestClientStale(t *testing.T) {
 
 // TestClientMany has two commands out at once, each done on its own.
 func TestClientMany(t *testing.T) {
-	c := NewClient[int, int]("g", []string{"a"}, 0)
-	c, effs := c.Command("x", 1)
+	c, effs := knowingLeader("a").Command("x", 1)
 	_, x := asked(t, effs)
 	c, effs = c.Command("y", 2)
 	_, y := asked(t, effs)

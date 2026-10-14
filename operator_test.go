@@ -99,7 +99,7 @@ func (o operator) identified(s swapping, m actor.Response) (swapping, []actor.Ef
 // the next step once done, else to the same again. A change that failed,
 // applied or not, is tried again, which changes nothing if it was.
 func (o operator) changed(s swapping, m actor.Response) (swapping, []actor.Effect) {
-	ans := answerOf(o.members, s.ask, m.Value, m.Err)
+	ans := answerOf(o.members, s.ask, m.Value, m.Err, true)
 	switch {
 	case !ans.done:
 		s.ask = ans.node

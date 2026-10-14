@@ -31,12 +31,13 @@ var ErrLeaderChanged = errors.New("quorum: the leader changed; the command may h
 const retryAfter = 50 * time.Millisecond
 
 // Command has group apply cmd, and returns its reply. It asks the members
-// on nodes in turn until it finds the leader, which replies once cmd is
-// committed and applied.
+// on nodes in turn who leads, past those down, and sends cmd to the one
+// that says it does, which replies once cmd is committed and applied.
 //
 // An error other than ctx's means cmd may have been applied or not: its
-// leader lost its place, see ErrLeaderChanged, or could not be reached.
-// Command does not try it again, as applying it twice may differ from once.
+// leader lost its place, see ErrLeaderChanged, or was lost while it had
+// cmd. Command does not try it again, as applying it twice may differ from
+// once.
 func Command[Rep, Cmd any](ctx context.Context, caller actor.Caller, group string, nodes []string, cmd Cmd) (Rep, error) {
 	var zero Rep
 	v, err := ask(ctx, caller, group, nodes, command{cmd})
@@ -48,12 +49,20 @@ func Command[Rep, Cmd any](ctx context.Context, caller actor.Caller, group strin
 }
 
 // ask sends req to the leader of group, found among the members on nodes,
-// and returns what it replied once done: applied, or an error.
+// and returns what it replied once done: applied, or an error. A command
+// goes only to a member that just said it leads; see answerOf.
 func ask(ctx context.Context, caller actor.Caller, group string, nodes []string, req any) (any, error) {
+	_, unsafe := req.(command)
 	node := nodes[0]
 	for {
+		if unsafe {
+			var err error
+			if node, err = findLeader(ctx, caller, group, nodes, node); err != nil {
+				return nil, err
+			}
+		}
 		v, err := actor.Call(ctx, caller, actor.Remote{Node: node, Name: replicaName(group)}, req)
-		ans := answerOf(nodes, node, v, err)
+		ans := answerOf(nodes, node, v, err, !unsafe)
 		if ans.done {
 			return ans.v, ans.err
 		}
@@ -64,6 +73,43 @@ func ask(ctx context.Context, caller actor.Caller, group string, nodes []string,
 			}
 		}
 	}
+}
+
+// findLeader asks the members on nodes who leads, from the one on node
+// on, and returns the node of the first that says it does itself.
+func findLeader(ctx context.Context, caller actor.Caller, group string, nodes []string, node string) (string, error) {
+	for {
+		v, err := actor.Call(ctx, caller, actor.Remote{Node: node, Name: replicaName(group)}, whoLeads{})
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		next, leads, wait := probed(nodes, node, v, err)
+		if leads {
+			return node, nil
+		}
+		node = next
+		if wait {
+			if err := pause(ctx, retryAfter); err != nil {
+				return "", err
+			}
+		}
+	}
+}
+
+// probed returns what to make of v or err, the answer of the member on
+// node to whoLeads: that it leads, or the node to ask next, at once or
+// after a pause.
+func probed(nodes []string, node string, v any, err error) (next string, leads, wait bool) {
+	r, ok := v.(redirect)
+	switch {
+	case err != nil || !ok:
+		return nextOf(nodes, node), false, true // down, or no member there
+	case r.Leader == node:
+		return node, true, false
+	case r.Leader != "":
+		return r.Leader, false, false
+	}
+	return nextOf(nodes, node), false, true // no leader known
 }
 
 // answer is what a client makes of a member's answer to a request: it is
@@ -81,11 +127,17 @@ type answer struct {
 // node, one of nodes or not. A member that is not the leader tells where
 // it is, if it knows; the leader busy with a change of members has the
 // request wait for it.
-func answerOf(nodes []string, node string, v any, err error) answer {
+//
+// A request safe to send twice, as a read, goes to the next member if the
+// node is down, or did not answer in time. A command does not: the node
+// may have had it, and applied it.
+func answerOf(nodes []string, node string, v any, err error, safe bool) answer {
 	switch {
 	case errors.Is(err, proc.NoProc):
 		// No member there, which took nothing: ask the next.
 		return answer{node: nextOf(nodes, node)}
+	case safe && (errors.Is(err, proc.NoConnection) || errors.Is(err, context.DeadlineExceeded)):
+		return answer{node: nextOf(nodes, node), pause: true}
 	case err != nil:
 		return answer{done: true, err: err}
 	}
@@ -125,6 +177,8 @@ func pause(ctx context.Context, d time.Duration) error {
 // the founding of the group.
 func (b behaviour[S, Cmd, Rep]) call(r role, d replica[S], c genstatem.Call) (role, replica[S], []actor.Effect) {
 	switch m := c.Req.(type) {
+	case whoLeads:
+		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	case command:
 		return b.command(r, d, c, m)
 	case read:
