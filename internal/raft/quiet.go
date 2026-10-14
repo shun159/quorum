@@ -97,6 +97,14 @@ func (d *replica[S]) unhush(timer actor.Effect) []actor.Effect {
 	return actor.Do(actor.Demonitor{Tag: watchLeader{}}, timer)
 }
 
+// wakeTimer starts the election timeout of a quiet follower that lost its
+// leader. It waited for the leader's node to fall silent, or the leader to
+// die, already: it waits only up to base more, drawn anew, so that the
+// members do not all stand at once.
+func (d *replica[S]) wakeTimer(base time.Duration) actor.Effect {
+	return genstatem.StartStateTimeout{After: time.Duration(d.rng.Uint64() % uint64(base))}
+}
+
 // nodeEvent notes a node falling silent or down, or heard or up again. A
 // quiet follower whose leader's node is lost stops following it; a quiet
 // leader that hears from no majority steps down.
@@ -108,7 +116,7 @@ func (b behaviour[S, Cmd, Rep]) nodeEvent(r role, d replica[S], node string, los
 	d.unheard = append(d.unheard, node)
 	switch {
 	case r == follower && d.quiet && d.leader.Node() == node:
-		return r, d, d.unhush(d.electionTimer(b.spec.ElectionTimeout))
+		return r, d, d.unhush(d.wakeTimer(b.spec.ElectionTimeout))
 	case r == leader && d.quiet && d.hears() < d.config.majority():
 		d.quiet, d.leader = false, proc.PID{}
 		return follower, d, nil
@@ -135,7 +143,7 @@ func (b behaviour[S, Cmd, Rep]) leaderDown(r role, d replica[S], m actor.Down) (
 	if r != follower || !d.quiet || m.PID.Node() != d.leader.Node() {
 		return r, d, nil
 	}
-	return r, d, d.unhush(d.electionTimer(b.spec.ElectionTimeout))
+	return r, d, d.unhush(d.wakeTimer(b.spec.ElectionTimeout))
 }
 
 // nodeLost reports whether msg tells of a node lost, or found again.

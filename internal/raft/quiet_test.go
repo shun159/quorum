@@ -188,14 +188,18 @@ func TestQuietLeaderSilent(t *testing.T) {
 		t.Errorf("c silent: %v, quiet %v, leader %v", r, after.quiet, after.leader)
 	}
 	_, after, effs := b.HandleEvent(follower, d, genstatem.Info{Msg: proc.NodeSilent{Node: ida.Node()}})
-	if after.quiet || !after.leader.IsZero() || !slices.ContainsFunc(effs, isStateTimeout) {
+	if after.quiet || !after.leader.IsZero() || !slices.ContainsFunc(effs, soon(b.spec.ElectionTimeout)) {
 		t.Errorf("a silent: quiet %v, leader %v, %v", after.quiet, after.leader, effs)
 	}
 }
 
-func isStateTimeout(e actor.Effect) bool {
-	_, ok := e.(genstatem.StartStateTimeout)
-	return ok
+// soon reports whether an effect starts the state timeout within d: a
+// quiet follower, its leader lost, waited for that already.
+func soon(d time.Duration) func(actor.Effect) bool {
+	return func(e actor.Effect) bool {
+		t, ok := e.(genstatem.StartStateTimeout)
+		return ok && t.After < d
+	}
 }
 
 // A member restarted is a process other than the one it first was: led
