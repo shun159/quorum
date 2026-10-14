@@ -178,7 +178,7 @@ func (b behaviour[S, Cmd, Rep]) appendConfig(r role, d *replica[S], config Confi
 		}
 	}
 	effs := b.saveLog(d, d.log.lastIndex())
-	effs = append(effs, b.replicate(*d)...)
+	effs = append(effs, b.replicate(d)...)
 	return append(effs, b.commit(r, d)...)
 }
 

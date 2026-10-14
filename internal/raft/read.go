@@ -45,7 +45,7 @@ func (b behaviour[S, Cmd, Rep]) read(r role, d replica[S], c genstatem.Call, m r
 	}
 	d.readSeq++
 	d.reads = append(d.reads, reading{seq: d.readSeq, cmd: m.Cmd, from: c.From})
-	effs := b.replicate(d)
+	effs := b.replicate(&d)
 	return r, d, append(effs, b.serveReads(&d)...)
 }
 

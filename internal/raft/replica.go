@@ -72,6 +72,7 @@ type peer struct {
 
 	heardIn uint64 // the round of the check the leader last heard from it in
 	read    uint64 // the last round of confirming reads it answered
+	sending uint64 // the index of the snapshot on its way to it, if not 0
 }
 
 // pending is a command the leader appended, to reply to once applied.
@@ -195,8 +196,13 @@ func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.E
 		if node, lost, ok := nodeLost(e.Msg); ok {
 			return b.nodeEvent(r, d, node, lost)
 		}
-		if m, ok := e.Msg.(actor.Down); ok && m.Tag == (watchLeader{}) {
-			return b.leaderDown(r, d, m)
+		if m, ok := e.Msg.(actor.Down); ok {
+			switch tag := m.Tag.(type) {
+			case watchLeader:
+				return b.leaderDown(r, d, m)
+			case snapshotTo:
+				return b.snapshotLost(r, d, tag)
+			}
 		}
 		return b.message(r, d, e.Msg)
 	}

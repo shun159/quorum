@@ -47,16 +47,16 @@ func (d *replica[S]) mayQuiet() bool {
 func (b behaviour[S, Cmd, Rep]) beat(d replica[S]) (replica[S], []actor.Effect) {
 	if !d.mayQuiet() || b.spec.Quiet < 0 {
 		d.idle = 0
-		return d, b.heartbeat(d)
+		return d, b.heartbeat(&d)
 	}
 	d.idle++
 	if time.Duration(d.idle)*b.spec.Heartbeat < b.spec.Quiet {
-		return d, b.heartbeat(d)
+		return d, b.heartbeat(&d)
 	}
 	d.quiet = true
 	effs := []actor.Effect{genstatem.CancelTimeout{Name: checkQuorum{}}}
 	for _, p := range d.peers {
-		effs = append(effs, b.appendTo(d, p))
+		effs = append(effs, b.appendTo(&d, p)...)
 	}
 	return d, effs
 }
@@ -72,7 +72,7 @@ func (b behaviour[S, Cmd, Rep]) wake(d *replica[S]) []actor.Effect {
 	for i := range d.peers {
 		d.heard(&d.peers[i])
 	}
-	return append(b.heartbeat(*d), b.quorumTimer())
+	return append(b.heartbeat(d), b.quorumTimer())
 }
 
 // follow has a follower, heard from its leader, wait for it again. Told
