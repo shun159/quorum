@@ -37,7 +37,10 @@ func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
 	for _, p := range d.pending {
 		effs = append(effs, actor.Reply{To: p.from, Value: deposed{}})
 	}
-	d.pending, d.peers = nil, nil
+	for _, j := range d.joining {
+		effs = append(effs, actor.Reply{To: j.from, Value: deposed{}})
+	}
+	d.pending, d.joining, d.peers = nil, nil, nil
 	if l, ok := b.spec.Machine.(Leader[S]); ok {
 		effs = append(effs, l.Surrendered(d.state)...)
 	}
@@ -190,6 +193,9 @@ func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 		if r == leader {
 			effs = append(effs, d.reply(d.applied, rep)...)
 		}
+	}
+	if r == leader {
+		effs = append(effs, d.joined()...)
 	}
 	return append(effs, b.takeSnapshot(d)...)
 }

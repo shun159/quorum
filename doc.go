@@ -31,8 +31,9 @@
 // a majority of the voters elects the leader and commits. [Found] founds
 // a group once, its first configuration written alike into the logs of
 // its first members. [AddMember] adds a member as a learner, which the
-// leader makes a voter once it has caught up, and [RemoveMember] removes
-// one; a change of members waits for the one before it.
+// leader makes a voter once it has caught up, and returns then; and
+// [RemoveMember] removes one. A change of members waits for the one
+// before it.
 //
 // A member is known by the PID it first had on its storage, blank. It
 // keeps its identity, its term, its vote and its log in a [Storage], and,
@@ -40,7 +41,8 @@
 // acknowledges entries, once they are durable there. On a new disk, or
 // without a storage, a member restarted is another, in no configuration:
 // it neither votes nor stands, nor takes what is sent to the one before
-// it. To swap the disk of a node, remove its member, then add the new one.
+// it. To swap the disk of a node, remove its member, then add the new one;
+// once added, the next node may be swapped.
 //
 // # Snapshots
 //

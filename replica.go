@@ -44,6 +44,7 @@ type replica[S any] struct {
 	votes   []proc.PID // granted to it, as a candidate
 	peers   []peer     // the other members, as the leader
 	pending []pending  // commands to reply to, as the leader, by index
+	joining []joining  // members added, to reply to once voters, as the leader
 	round   uint64     // of the checks of the quorum, as the leader
 
 	seq    uint64 // of the last write to the storage
@@ -65,6 +66,12 @@ type peer struct {
 type pending struct {
 	index uint64
 	from  actor.From
+}
+
+// joining is a member added, by a client to reply to once it is a voter.
+type joining struct {
+	id   proc.PID
+	from actor.From
 }
 
 // behaviour is a member of a group, a genstatem with state enter calls.

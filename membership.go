@@ -68,10 +68,14 @@ func (d *replica[S]) foundedWith(config Config) bool {
 // AddMember adds the member on node to group, asking the members on nodes
 // for the leader. The member joins as a learner, following the log without
 // voting; once it has caught up, the leader makes it a voter. AddMember
-// returns once the member is a learner.
+// returns then, once the member counts toward a majority, which one cut
+// off may take long to: ctx bounds the wait. Run again, as after
+// ErrLeaderChanged, it waits on.
 //
 // The node must have no member in the group: one on a new disk, which
-// replaces another on the node, is added once that one is removed.
+// replaces another on the node, is added once that one is removed. Disks
+// swapped one node after another, each AddMember returning before the next
+// node is taken down, the group keeps its majority throughout.
 func AddMember(ctx context.Context, caller actor.Caller, group string, nodes []string, node string) error {
 	v, err := actor.Call(ctx, caller, actor.Remote{Node: node, Name: replicaName(group)}, identify{})
 	if err != nil {
@@ -90,8 +94,8 @@ func RemoveMember(ctx context.Context, caller actor.Caller, group string, nodes 
 }
 
 // change handles a change of the members. The leader appends the
-// configuration it makes, and replies once it is committed; one change at
-// a time.
+// configuration it makes, one change at a time. It replies to a removal
+// once committed, to an addition once the member is a voter.
 func (b behaviour[S, Cmd, Rep]) change(r role, d replica[S], c genstatem.Call, m any) (role, replica[S], []actor.Effect) {
 	if r != leader {
 		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
@@ -100,14 +104,42 @@ func (b behaviour[S, Cmd, Rep]) change(r role, d replica[S], c genstatem.Call, m
 		return r, d, actor.Do(c.Reply(busy{}))
 	}
 	config, err := b.changed(d.config, m)
+	add, adding := m.(addMember)
 	switch {
 	case err != nil:
 		return r, d, actor.Do(c.Reply(rejected{err.Error()}))
+	case adding:
+		d.joining = append(d.joining, joining{id: add.ID, from: c.From})
 	case sameConfig(config, d.config):
 		return r, d, actor.Do(c.Reply(applied{}))
+	default:
+		d.pending = append(d.pending, pending{index: d.log.lastIndex() + 1, from: c.From})
 	}
-	d.pending = append(d.pending, pending{index: d.log.lastIndex() + 1, from: c.From})
+	if sameConfig(config, d.config) {
+		return r, d, d.joined() // added already
+	}
 	return r, d, b.appendConfig(r, &d, config)
+}
+
+// joined replies to the additions of members now voters by the
+// configuration committed, and of members removed since.
+func (d *replica[S]) joined() []actor.Effect {
+	committed := d.log.configUpTo(d.commit)
+	var effs []actor.Effect
+	var waiting []joining
+	for _, j := range d.joining {
+		switch {
+		case committed.isVoter(j.id):
+			effs = append(effs, actor.Reply{To: j.from, Value: applied{}})
+		case !d.config.has(j.id):
+			reason := fmt.Sprintf("quorum: %v was removed before it could vote", j.id)
+			effs = append(effs, actor.Reply{To: j.from, Value: rejected{reason}})
+		default:
+			waiting = append(waiting, j)
+		}
+	}
+	d.joining = waiting
+	return effs
 }
 
 // mayChange reports whether the leader may change the members: once the

@@ -1,6 +1,7 @@
 package quorum
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -104,7 +105,8 @@ func TestNonVoterRefuses(t *testing.T) {
 
 // The swap of a node: its member lost with its disk, the node comes back
 // blank; removed, then added again under the same name, the member catches
-// up as a learner and votes again, as the one before it did.
+// up as a learner and votes again, as the one before it did, by the time
+// it is added.
 func TestNodeSwap(t *testing.T) {
 	g := newGroup(t, 1, three)
 	for range 3 {
@@ -117,14 +119,18 @@ func TestNodeSwap(t *testing.T) {
 	if _, err := g.ask(removeMember{"c"}); err != nil {
 		t.Fatalf("remove c: %v", err)
 	}
-	if _, err := g.ask(addMember{g.identify("c")}); err != nil {
+	newc := g.identify("c")
+	if _, err := g.ask(addMember{newc}); err != nil {
 		t.Fatalf("add c: %v", err)
 	}
+	// Added, c is a voter, by what the leader committed.
+	_, ld, _ := g.member(g.leader())
+	if !ld.log.configUpTo(ld.commit).isVoter(newc) {
+		t.Fatalf("c added, but not a voter: %+v", ld.log.configUpTo(ld.commit))
+	}
 	g.run(2 * time.Second)
-
-	_, d, _ := g.member("c")
-	if !d.config.isVoter(d.id) || d.state != 3 {
-		t.Fatalf("c: voter %v, holds %d, want a voter holding 3", d.config.isVoter(d.id), d.state)
+	if _, d, _ := g.member("c"); d.state != 3 {
+		t.Fatalf("c holds %d, want 3", d.state)
 	}
 	// c counts again: with a gone, b and c are a majority.
 	g.crash("a", 0)
@@ -203,5 +209,43 @@ func TestStandAsksLearners(t *testing.T) {
 	}
 	if !asked["a"] || !asked["c"] {
 		t.Errorf("asked %v, want a and c", asked)
+	}
+}
+
+// The leader replies to an addition once the member is a voter by the
+// configuration committed, not only appended; to one removed since, that
+// it was; and, stepping down, that it may be added or not.
+func TestAddRepliesOnceVoter(t *testing.T) {
+	_, d := member(t)
+	idd := proc.NewNode("d").NewPID()
+	from := actor.From{PID: ida}
+	learner := Config{Voters: []proc.PID{ida, idb, idc}, Learners: []proc.PID{idd}}
+	voter := learner.promoted(idd)
+	d.term, d.commit = 1, 2
+	d.log = d.log.add(Entry{Term: 1, Config: &learner}).add(Entry{Term: 1, Config: &voter})
+	d.logChanged()
+	d.joining = []joining{{id: idd, from: from}}
+
+	if effs := d.joined(); len(effs) != 0 {
+		t.Fatalf("replied while promoted, not committed: %v", effs)
+	}
+	d.commit = 3
+	if effs := d.joined(); len(effs) != 1 || effs[0] != (actor.Reply{To: from, Value: applied{}}) || len(d.joining) != 0 {
+		t.Fatalf("committed a voter: %v, %d waiting", effs, len(d.joining))
+	}
+
+	d.joining = []joining{{id: idd, from: from}}
+	removed := voter.without(idd)
+	d.log = d.log.add(Entry{Term: 1, Config: &removed})
+	d.logChanged()
+	d.commit = 2 // as if the voter were not committed, only the learner
+	if effs := d.joined(); len(effs) != 1 || effs[0].(actor.Reply).Value == (applied{}) {
+		t.Fatalf("removed: %v", effs)
+	}
+
+	d.joining = []joining{{id: idd, from: from}}
+	b, _ := member(t)
+	if effs := b.surrender(&d); !slices.Contains(effs, actor.Effect(actor.Reply{To: from, Value: deposed{}})) {
+		t.Errorf("surrendered: %v", effs)
 	}
 }
