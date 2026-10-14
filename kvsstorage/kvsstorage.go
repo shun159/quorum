@@ -24,6 +24,7 @@ package kvsstorage
 import (
 	"cmp"
 	"fmt"
+	"path/filepath"
 	"slices"
 
 	"github.com/shun159/molecule/actor"
@@ -63,9 +64,17 @@ type Record struct {
 // Table is a table of members.
 type Table = kvs.Table[Key, Record]
 
+var options = kvs.Options[Key, Record]{Type: kvs.OrderedSet}
+
 // Open opens the table kept in dir, made if missing.
 func Open(dir string) (*Table, error) {
-	return kvs.Open(dir, kvs.Options[Key, Record]{Type: kvs.OrderedSet})
+	return kvs.Open(dir, options)
+}
+
+// Child returns the owner of the table kept in dir, made if missing, to
+// start under a supervisor ahead of the members In it: see kvs.Child.
+func Child(dir string) gen.Child {
+	return kvs.Child(dir, options)
 }
 
 // For returns the storage of the member of group in t.
@@ -76,7 +85,10 @@ func For(t *Table, group string) quorum.Storage {
 // In returns the storage of the member of group in the table kept in dir,
 // open by Child.
 func In(dir, group string) quorum.Storage {
-	return storage{dir: clean(dir), group: group}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs // for kvs.Opened to find it without the working directory
+	}
+	return storage{dir: dir, group: group}
 }
 
 // storage is the part of a member in its table: t, or else the table open
@@ -91,7 +103,7 @@ func (s storage) table() (*Table, error) {
 	if s.t != nil {
 		return s.t, nil
 	}
-	return opened(s.dir)
+	return kvs.Opened[Key, Record](s.dir)
 }
 
 func (s storage) key(kind Kind, index uint64) Key {

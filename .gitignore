@@ -19,3 +19,6 @@ go.work.sum
 .vscode/
 *.swp
 .DS_Store
+
+# Data of the examples run from the root
+/locks-data/
