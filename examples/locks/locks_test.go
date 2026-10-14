@@ -11,7 +11,6 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
-	"github.com/shun159/quorum/kvsstorage"
 )
 
 // The machine gives a lock to one owner at a time, each time with a
@@ -53,10 +52,9 @@ type cluster struct {
 }
 
 type node struct {
-	n     *proc.Node
-	d     *dist.Dist
-	app   *application.Running
-	table *kvsstorage.Table
+	n   *proc.Node
+	d   *dist.Dist
+	app *application.Running
 }
 
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
@@ -77,10 +75,6 @@ func newCluster(t *testing.T) *cluster {
 // start starts the node name, on what it saved, if anything.
 func (c *cluster) start(name string) {
 	c.t.Helper()
-	table, err := kvsstorage.Open(filepath.Join(c.dir, name))
-	if err != nil {
-		c.t.Fatal(err)
-	}
 	n := proc.NewNode(name)
 	d, err := dist.Start(n, dist.Config{Listen: "127.0.0.1:0", Cookie: "locks", Resolve: c.resolve})
 	if err != nil {
@@ -89,11 +83,11 @@ func (c *cluster) start(name string) {
 	c.mu.Lock()
 	c.addrs[name] = d.Addr().String()
 	c.mu.Unlock()
-	app, err := startLocks(context.Background(), n, table)
+	app, err := startLocks(context.Background(), n, filepath.Join(c.dir, name))
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	c.nodes[name] = &node{n: n, d: d, app: app, table: table}
+	c.nodes[name] = &node{n: n, d: d, app: app}
 }
 
 // stop stops the node name, if it runs.
@@ -104,7 +98,6 @@ func (c *cluster) stop(name string) {
 	}
 	nd.app.Stop(context.Background())
 	nd.d.Stop()
-	nd.table.Close()
 	delete(c.nodes, name)
 }
 

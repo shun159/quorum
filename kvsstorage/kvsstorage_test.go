@@ -1,11 +1,13 @@
 package kvsstorage
 
 import (
+	"context"
 	"slices"
 	"testing"
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/genserver"
+	"github.com/shun159/molecule/behaviours/supervisor"
 	"github.com/shun159/molecule/gensim"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
@@ -130,5 +132,43 @@ func TestSnapshot(t *testing.T) {
 	// What is left of the log is that after the snapshot.
 	for k := range table.Range(Key{Group: "g", Kind: KindEntry}, Key{Group: "g", Kind: KindEntry, Index: 3}) {
 		t.Errorf("entry %d left", k.Index)
+	}
+}
+
+// The table of Child is open while it runs, for the members In it, and
+// closed once it stops.
+func TestChild(t *testing.T) {
+	dir := t.TempDir()
+	g := In(dir, "g")
+	if _, err := g.Load(); err == nil {
+		t.Fatal("loaded before the table is open")
+	}
+
+	n := proc.NewNode("a")
+	ctx := context.Background()
+	sup, err := supervisor.Start(ctx, n, supervisor.Spec{
+		Children: []supervisor.ChildSpec{{ID: "storage", Start: Child(dir)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	save(t, g, g.Append(1, entries(1, 1), 1))
+	if saved, err := g.Load(); err != nil || !slices.Equal(saved.Log, entries(1, 1)) {
+		t.Fatalf("loaded %+v, %v", saved, err)
+	}
+	if err := supervisor.Stop(ctx, n, sup); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Load(); err == nil {
+		t.Error("loaded once the table is closed")
+	}
+
+	table, err := Open(dir) // only once closed
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer table.Close()
+	if saved, _ := For(table, "g").Load(); !slices.Equal(saved.Log, entries(1, 1)) {
+		t.Errorf("loaded %+v from the table opened again", saved)
 	}
 }

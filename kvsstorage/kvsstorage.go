@@ -3,8 +3,19 @@
 // One table serves all the groups of a node, each member its own part of
 // it, so that the writes of all go to disk together.
 //
-//	table, err := kvsstorage.Open(dir)
-//	spec.Storage = kvsstorage.For(table, spec.Group)
+// The table is a child of the supervision tree, which opens it as it
+// starts and closes it as it stops, ahead of the members, which find it
+// by its directory:
+//
+//	Strategy: supervisor.OneForAll,
+//	Children: []supervisor.ChildSpec{
+//		{ID: "storage", Start: kvsstorage.Child(dir)},
+//		{ID: "member", Start: quorum.Child(spec)}, // spec.Storage = kvsstorage.In(dir, spec.Group)
+//	},
+//
+// Under OneForAll, the table and the members restart together: a member
+// stops on a write failed, after which the table must be opened again. A
+// table opened by hand is For.
 //
 // The commands and the states of the machines are encoded by gob: their
 // types must be registered, as dist.Register does.
@@ -62,9 +73,25 @@ func For(t *Table, group string) quorum.Storage {
 	return storage{t: t, group: group}
 }
 
+// In returns the storage of the member of group in the table kept in dir,
+// open by Child.
+func In(dir, group string) quorum.Storage {
+	return storage{dir: clean(dir), group: group}
+}
+
+// storage is the part of a member in its table: t, or else the table open
+// in dir.
 type storage struct {
 	t     *Table
+	dir   string
 	group string
+}
+
+func (s storage) table() (*Table, error) {
+	if s.t != nil {
+		return s.t, nil
+	}
+	return opened(s.dir)
 }
 
 func (s storage) key(kind Kind, index uint64) Key {
@@ -77,8 +104,12 @@ func (s storage) end() Key { return Key{Group: s.group + "\x00"} }
 // Load reads the records of the member back. Entries up to the snapshot,
 // left by a crash amid deleting them, are skipped.
 func (s storage) Load() (quorum.Saved, error) {
+	t, err := s.table()
+	if err != nil {
+		return quorum.Saved{}, err
+	}
 	var saved quorum.Saved
-	for k, r := range s.t.Range(s.key(KindState, 0), s.end()) {
+	for k, r := range t.Range(s.key(KindState, 0), s.end()) {
 		switch {
 		case k.Kind == KindState:
 			saved.State = r.State
@@ -96,7 +127,9 @@ func (s storage) Load() (quorum.Saved, error) {
 }
 
 func (s storage) SaveState(st quorum.State, tag any) actor.Effect {
-	return s.t.PutEffect(s.key(KindState, 0), Record{State: st}, tag)
+	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
+		return []write{put(t, s.key(KindState, 0), Record{State: st})}
+	}}
 }
 
 func (s storage) Durable(msg any) (any, error, bool) {
@@ -110,13 +143,13 @@ func (s storage) Durable(msg any) (any, error, bool) {
 // them, the log left on disk is the start of the old one, or of the new
 // one, never old entries after new ones.
 func (s storage) Append(index uint64, entries []quorum.Entry, tag any) actor.Effect {
-	return writesEffect{s: s, tag: tag, writes: func() []write {
+	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
 		var writes []write
-		for _, k := range slices.Backward(s.keys(index)) {
-			writes = append(writes, s.delete(k))
+		for _, k := range slices.Backward(s.keys(t, index)) {
+			writes = append(writes, del(t, k))
 		}
 		for i, e := range entries {
-			writes = append(writes, s.put(s.key(KindEntry, index+uint64(i)), Record{Entry: e}))
+			writes = append(writes, put(t, s.key(KindEntry, index+uint64(i)), Record{Entry: e}))
 		}
 		return writes
 	}}
@@ -125,22 +158,22 @@ func (s storage) Append(index uint64, entries []quorum.Entry, tag any) actor.Eff
 // SaveSnapshot returns the effect putting snap, then deleting the entries
 // up to its index, which Load skips meanwhile.
 func (s storage) SaveSnapshot(snap quorum.Snapshot, tag any) actor.Effect {
-	return writesEffect{s: s, tag: tag, writes: func() []write {
-		writes := []write{s.put(s.key(KindSnapshot, 0), Record{Snapshot: snap})}
-		for _, k := range s.keys(1) {
+	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
+		writes := []write{put(t, s.key(KindSnapshot, 0), Record{Snapshot: snap})}
+		for _, k := range s.keys(t, 1) {
 			if k.Index > snap.Index {
 				break
 			}
-			writes = append(writes, s.delete(k))
+			writes = append(writes, del(t, k))
 		}
 		return writes
 	}}
 }
 
-// keys returns the keys of the entries saved from index on, in order.
-func (s storage) keys(index uint64) []Key {
+// keys returns the keys of the entries saved in t from index on, in order.
+func (s storage) keys(t *Table, index uint64) []Key {
 	var keys []Key
-	for k := range s.t.Range(s.key(KindEntry, index), s.end()) {
+	for k := range t.Range(s.key(KindEntry, index), s.end()) {
 		keys = append(keys, k)
 	}
 	return keys
@@ -149,26 +182,32 @@ func (s storage) keys(index uint64) []Key {
 // write is a write of the table, to make with its tag.
 type write func(tag any) actor.Effect
 
-func (s storage) put(k Key, r Record) write {
-	return func(tag any) actor.Effect { return s.t.PutEffect(k, r, tag) }
+func put(t *Table, k Key, r Record) write {
+	return func(tag any) actor.Effect { return t.PutEffect(k, r, tag) }
 }
 
-func (s storage) delete(k Key) write {
-	return func(tag any) actor.Effect { return s.t.DeleteEffect(k, tag) }
+func del(t *Table, k Key) write {
+	return func(tag any) actor.Effect { return t.DeleteEffect(k, tag) }
 }
 
 // writesEffect performs the writes it makes, as it is performed: what
 // they are depends on what is saved then. Only its last write tells when
-// it is durable, which those before it are then.
+// it is durable, which those before it are then. Without a table open,
+// it fails.
 type writesEffect struct {
 	actor.Extension
 	s      storage
 	tag    any
-	writes func() []write
+	writes func(*Table) []write
 }
 
 func (e writesEffect) Perform(env gen.Env) {
-	writes := e.writes()
+	t, err := e.s.table()
+	if err != nil {
+		env.Send(env.Self(), kvs.Durable{Tag: e.tag, Err: err})
+		return
+	}
+	writes := e.writes(t)
 	if len(writes) == 0 {
 		env.Send(env.Self(), kvs.Durable{Tag: e.tag})
 		return

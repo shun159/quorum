@@ -2,8 +2,9 @@
 // the group agrees on who holds each lock, so a lock is not lost, nor
 // given twice, while two of the three nodes live.
 //
-//	locks_sup (one_for_one)
-//	└── locks_member  the member of the group, its log on disk
+//	locks_sup (one_for_all)
+//	├── locks_storage  the table on disk, in -dir
+//	└── locks_member   the member of the group, its log in the table
 //
 // Each file holds one "module": locks_app.go is the application,
 // locks_sup.go the supervisor, locks_machine.go the state machine and its
@@ -47,7 +48,6 @@ import (
 
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
-	"github.com/shun159/quorum/kvsstorage"
 )
 
 func main() {
@@ -62,12 +62,6 @@ func main() {
 		log.Fatalf("%s is not in -nodes", *name)
 	}
 
-	table, err := kvsstorage.Open(filepath.Join(*dir, *name))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer table.Close()
-
 	n := proc.NewNode(*name)
 	d, err := startDist(n, addrs)
 	if err != nil {
@@ -75,7 +69,7 @@ func main() {
 	}
 	defer d.Stop()
 
-	app, err := startLocks(context.Background(), n, table)
+	app, err := startLocks(context.Background(), n, filepath.Join(*dir, *name))
 	if err != nil {
 		log.Fatal(err)
 	}
