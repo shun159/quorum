@@ -23,6 +23,8 @@ type console struct {
 const usage = "found, lock NAME, unlock NAME, or who NAME"
 
 func (c console) run(in io.Reader) {
+	fmt.Fprintf(c.out, "locks on %s, one of %s\n", c.n.Name(), strings.Join(c.nodes, ", "))
+	fmt.Fprintln(c.out, "once all are up, type found on one of them, once; then lock NAME, unlock NAME, or who NAME")
 	sc := bufio.NewScanner(in)
 	for sc.Scan() {
 		switch f := strings.Fields(sc.Text()); {
