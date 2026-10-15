@@ -206,3 +206,28 @@ func TestPipeline(t *testing.T) {
 		t.Errorf("told the member lacks 4 and 5, sent %+v", msgs)
 	}
 }
+
+// A member sent entries since the last beat is not beaten to: it knows the
+// leader lives. The beat after, it is.
+func TestBeatSkipped(t *testing.T) {
+	b, d := leading(t)
+	b.spec.Quiet = -1 // never quiet
+	beats := func(effs []actor.Effect) int {
+		count := 0
+		for _, m := range sent(effs) {
+			if _, ok := m.(appendEntries); ok {
+				count++
+			}
+		}
+		return count
+	}
+	_, d, _ = b.HandleEvent(leader, d, genstatem.Call{From: reader, Req: command{Cmd: 1}})
+	_, d, effs := b.HandleEvent(leader, d, genstatem.StateTimeout{})
+	if n := beats(effs); n != 0 {
+		t.Errorf("beat after entries sent: %d messages", n)
+	}
+	_, _, effs = b.HandleEvent(leader, d, genstatem.StateTimeout{})
+	if n := beats(effs); n != 2 {
+		t.Errorf("beat after nothing sent: %d messages, want 2", n)
+	}
+}

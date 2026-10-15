@@ -75,6 +75,7 @@ type peer struct {
 	// the leader sends it entries on from those on their way, not waiting
 	// for its replies. Until then, or failing, it sends from next again.
 	matched bool
+	sent    bool   // entries since the last beat: it knows the leader lives
 	match   uint64 // the last index known to match the leader's
 
 	heardIn uint64  // the round of the check the leader last heard from it in
