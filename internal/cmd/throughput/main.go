@@ -1,7 +1,7 @@
 // Command throughput measures how many commands groups apply a second,
 // over dist, each node a process of its own. It starts three nodes, founds
 // the groups, then has clients send commands to each group, each one after
-// the other, for a while, and tells the commands applied a second, their
+// the other, in a session of its own, for a while, and tells the commands applied a second, their
 // latency, the CPU the nodes took, and the elections meanwhile.
 //
 //	go run ./internal/cmd/throughput -groups 1 -clients 64          # one group, 64 at once
@@ -21,7 +21,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -116,9 +115,18 @@ func measure(groups, clients int, length time.Duration, dir string) error {
 	elections := electionsOf(n)
 	cpu := cpuOf(procs)
 	start := time.Now()
-	lat, failed := send(n, groups, clients, length)
+	ss, err := startSenders(n, groups, clients, start.Add(length))
+	if err != nil {
+		return err
+	}
+	time.Sleep(time.Until(start.Add(length)))
 	took := time.Since(start)
 	used := cpuOf(procs) - cpu
+	time.Sleep(time.Second) // for the last commands to end
+	lat, failed, err := ss.results(n)
+	if err != nil {
+		return err
+	}
 
 	slices.Sort(lat)
 	if len(lat) == 0 {
@@ -130,41 +138,6 @@ func measure(groups, clients int, length time.Duration, dir string) error {
 	fmt.Printf("nodes' CPU: %.2f cores, %.1f µs a command\n", used.Seconds()/took.Seconds(), float64(used.Microseconds())/float64(len(lat)))
 	fmt.Printf("elections meanwhile: %d\n", electionsOf(n)-elections)
 	return nil
-}
-
-// send has clients send commands to each group, one after the other, for
-// length, and returns the latencies of those applied, and how many failed.
-func send(n *proc.Node, groups, clients int, length time.Duration) ([]time.Duration, int) {
-	var (
-		mu     sync.Mutex
-		all    []time.Duration
-		failed atomic.Int64
-		wg     sync.WaitGroup
-	)
-	end := time.Now().Add(length)
-	for g := range groups {
-		for range clients {
-			wg.Go(func() {
-				var lat []time.Duration
-				for time.Now().Before(end) {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					start := time.Now()
-					_, err := quorum.Command[int](ctx, n, group(g), names, 1)
-					cancel()
-					if err != nil {
-						failed.Add(1)
-						continue
-					}
-					lat = append(lat, time.Since(start))
-				}
-				mu.Lock()
-				all = append(all, lat...)
-				mu.Unlock()
-			})
-		}
-	}
-	wg.Wait()
-	return all, int(failed.Load())
 }
 
 func found(n *proc.Node, groups int) error {
