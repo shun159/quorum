@@ -139,7 +139,11 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		votedFor: saved.State.VotedFor,
 		log:      logOf(saved.Log...),
 	}
-	if snap := saved.Snapshot; snap.Index > 0 {
+	snap, err := b.loaded(saved.Snapshot)
+	if err != nil {
+		return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s cannot decode its snapshot: %w", b.spec.Group, err)
+	}
+	if snap.Index > 0 {
 		state, ok := snap.State.(S)
 		if !ok {
 			return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s saved a snapshot of a %T", b.spec.Group, snap.State)

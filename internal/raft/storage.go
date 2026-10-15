@@ -96,8 +96,46 @@ func (b behaviour[S, Cmd, Rep]) saveLog(d *replica[S], index uint64) []actor.Eff
 // saveSnapshot saves the snapshot of the member, in place of the entries
 // it holds.
 func (b behaviour[S, Cmd, Rep]) saveSnapshot(d *replica[S]) []actor.Effect {
-	snap := d.snapshot
+	if b.spec.Storage == nil {
+		return b.write(d, nil)
+	}
+	snap, err := b.stored(d.snapshot)
+	if err != nil {
+		return actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot encode its snapshot: %w", b.spec.Group, err)})
+	}
 	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.SaveSnapshot(snap, tag) })
+}
+
+// stateBytes is the state of a snapshot as an Encoder machine encodes it,
+// as the storage keeps it: gob, which would walk the state, only copies
+// its bytes.
+type stateBytes []byte
+
+// stored returns snap as the storage keeps it: its state encoded by the
+// machine, if it is an Encoder.
+func (b behaviour[S, Cmd, Rep]) stored(snap Snapshot) (Snapshot, error) {
+	m, ok := b.spec.Machine.(Encoder[S])
+	if !ok {
+		return snap, nil
+	}
+	data, err := m.EncodeState(snap.State.(S))
+	snap.State = stateBytes(data)
+	return snap, err
+}
+
+// loaded returns snap as the storage kept it, its state decoded.
+func (b behaviour[S, Cmd, Rep]) loaded(snap Snapshot) (Snapshot, error) {
+	data, ok := snap.State.(stateBytes)
+	if !ok {
+		return snap, nil
+	}
+	m, ok := b.spec.Machine.(Encoder[S])
+	if !ok {
+		return snap, fmt.Errorf("a state encoded, by a machine that does not decode it")
+	}
+	s, err := m.DecodeState(data)
+	snap.State = s
+	return snap, err
 }
 
 // write returns the effect of a write, tagged as the next. Without a

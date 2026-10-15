@@ -1,6 +1,9 @@
 package raft
 
 import (
+	"bytes"
+	"encoding/gob"
+	"reflect"
 	"testing"
 
 	"github.com/shun159/molecule/actor"
@@ -200,5 +203,35 @@ func TestReceiveChunks(t *testing.T) {
 		if has := d.receive(c.m); has != c.want {
 			t.Errorf("%d %s: has %d, want %d", i, c.name, has, c.want)
 		}
+	}
+}
+
+// The snapshot of an Encoder machine is saved as the machine encodes its
+// state, through gob as the storage of a node does, and comes back
+// decoded as the member starts again.
+func TestSnapshotSavedEncoded(t *testing.T) {
+	b, d := member(t)
+	b.spec.Machine, b.spec.SnapshotEvery = encodingCounter{}, 1
+	d.state, d.applied = 7, 1
+	var saved *Snapshot
+	for _, e := range b.takeSnapshot(&d) {
+		if e, ok := e.(memEffect); ok && e.w.snapshot != nil {
+			saved = e.w.snapshot
+		}
+	}
+	if saved == nil || !reflect.DeepEqual(saved.State, stateBytes("7")) {
+		t.Fatalf("saved %+v, want the state as the bytes of 7", saved)
+	}
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(saved); err != nil {
+		t.Fatal(err)
+	}
+	m := b.spec.Storage.(*memStorage)
+	if err := gob.NewDecoder(&buf).Decode(&m.saved.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	_, d, _, err := b.Init(idb)
+	if err != nil || d.state != 7 || d.snapshot.State != 7 {
+		t.Errorf("started again: state %d, snapshot of %#v, %v; want 7", d.state, d.snapshot.State, err)
 	}
 }
