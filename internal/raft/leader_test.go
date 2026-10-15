@@ -7,6 +7,7 @@ import (
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/genserver"
+	"github.com/shun159/molecule/behaviours/genstatem"
 	"github.com/shun159/molecule/gensim"
 	"github.com/shun159/molecule/proc"
 )
@@ -174,4 +175,34 @@ func (g *group) leading() int {
 		}
 	}
 	return count
+}
+
+// To a member matched, the leader sends each entry once, not waiting for
+// its replies; told the member lacks some, it sends them again.
+func TestPipeline(t *testing.T) {
+	b, d := leading(t)
+	for i := range d.peers {
+		d.peers[i].matched = true
+	}
+	to := func(effs []actor.Effect) []appendEntries {
+		var msgs []appendEntries
+		for _, m := range sent(effs) {
+			if m, ok := m.(appendEntries); ok && m.To == ida {
+				msgs = append(msgs, m)
+			}
+		}
+		return msgs
+	}
+	var effs []actor.Effect
+	for i := range uint64(3) {
+		_, d, effs = b.HandleEvent(leader, d, genstatem.Call{From: reader, Req: command{Cmd: 1}})
+		if msgs := to(effs); len(msgs) != 1 || msgs[0].PrevIndex != 2+i || len(msgs[0].Entries) != 1 {
+			t.Fatalf("command %d sent %+v; want the entry after %d alone", i, msgs, 2+i)
+		}
+	}
+	lost := appendReply{Term: 1, From: ida, LastIndex: 3} // the entries after 3 lost
+	_, d, effs = b.HandleEvent(leader, d, genstatem.Info{Msg: lost})
+	if msgs := to(effs); len(msgs) != 1 || msgs[0].PrevIndex != 3 || len(msgs[0].Entries) != 2 {
+		t.Errorf("told the member lacks 4 and 5, sent %+v", msgs)
+	}
 }

@@ -68,9 +68,13 @@ type replica[S any] struct {
 
 // peer is what the leader knows of the log of another member.
 type peer struct {
-	id    proc.PID
-	next  uint64 // the index of the next entry to send it
-	match uint64 // the last index known to match the leader's
+	id   proc.PID
+	next uint64 // the index of the next entry to send it
+	// matched tells that its log matched the leader's at the last reply:
+	// the leader sends it entries on from those on their way, not waiting
+	// for its replies. Until then, or failing, it sends from next again.
+	matched bool
+	match   uint64 // the last index known to match the leader's
 
 	heardIn uint64  // the round of the check the leader last heard from it in
 	read    uint64  // the last round of confirming reads it answered

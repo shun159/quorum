@@ -66,19 +66,25 @@ func (b behaviour[S, Cmd, Rep]) replicate(d *replica[S]) []actor.Effect {
 }
 
 // appendTo sends p the entries from its next one on, after the one before,
-// or the snapshot, if the leader has them no more.
+// or the snapshot, if the leader has them no more. The next it sends p go
+// on from those, on their way, once p matched: a message lost, p tells
+// it lacks the entry before the next, and the leader goes back.
 func (b behaviour[S, Cmd, Rep]) appendTo(d *replica[S], p peer) []actor.Effect {
 	if p.next <= d.log.start {
 		return b.sendSnapshot(d, p)
 	}
 	prev := p.next - 1
+	entries := d.log.from(p.next, maxEntries)
+	if p.matched && len(entries) > 0 {
+		d.peer(p.id).next = p.next + uint64(len(entries))
+	}
 	return actor.Do(b.send(p.id, appendEntries{
 		Term:      d.term,
 		Leader:    d.id,
 		To:        p.id,
 		PrevIndex: prev,
 		PrevTerm:  d.log.termAt(prev),
-		Entries:   d.log.from(p.next, maxEntries),
+		Entries:   entries,
 		Commit:    d.commit,
 		Read:      d.readSeq,
 		Quiet:     d.quiet,
@@ -128,10 +134,11 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 	p.read = max(p.read, m.Read)
 	p.snapshotArrived(m)
 	if !m.Success {
+		p.matched = false
 		p.next = max(1, min(p.next-1, m.LastIndex+1))
 		return r, d, append(b.serveReads(&d), b.appendTo(&d, *p)...)
 	}
-	p.match = max(p.match, m.Match)
+	p.match, p.matched = max(p.match, m.Match), true
 	p.next = max(p.next, p.match+1)
 	progress := *p
 	effs := append(b.serveReads(&d), b.commit(r, &d)...)
