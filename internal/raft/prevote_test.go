@@ -109,3 +109,18 @@ func TestPreStand(t *testing.T) {
 		t.Errorf("refused in term 2: %v in term %d", r2, d2.term)
 	}
 }
+
+// A member that is no voter, as far as its log goes, forgets its leader
+// once it hears from it no more: it would vote again, for the voters that
+// count it one, a later configuration making it one, which it misses.
+func TestLearnerForgetsLeader(t *testing.T) {
+	b, d := member(t)
+	config := Config{Voters: []proc.PID{ida, idc}, Learners: []proc.PID{idb}}
+	d.log, d.config = logOf(Entry{Config: &config}), config
+	d.leader = ida
+	r, d, _ := b.HandleEvent(follower, d, genstatem.StateTimeout{})
+	_, _, effs := b.HandleEvent(r, d, genstatem.Info{Msg: preVote{Term: 1, Candidate: idc, LastIndex: 2, LastTerm: 1}})
+	if msgs := sent(effs); len(msgs) != 1 || !msgs[0].(preVoteReply).Granted {
+		t.Errorf("leader %v; asked to pre-vote, answered %v", d.leader, msgs)
+	}
+}
