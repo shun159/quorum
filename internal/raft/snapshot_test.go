@@ -26,7 +26,7 @@ func TestSnapshotConfig(t *testing.T) {
 	founding := d.config
 	d = withCommands(d, 5)
 	d.log = d.log.add(Entry{Term: 1, Config: &Config{Voters: founding.Voters, Learners: []proc.PID{proc.NewNode("d").NewPID()}}})
-	d.logChanged()
+	d.logChanged(0)
 	d.commit, d.applied = 5, 5
 
 	b.takeSnapshot(&d)

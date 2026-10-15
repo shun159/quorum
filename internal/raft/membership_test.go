@@ -213,7 +213,7 @@ func TestOneChangeAtATime(t *testing.T) {
 	b, d := member(t)
 	d.term, d.commit = 1, 1
 	d.log = d.log.add(Entry{Term: 1, Config: &Config{Voters: []proc.PID{ida, idb, idc, proc.NewNode("d").NewPID()}}})
-	d.logChanged() // a change appended, not committed
+	d.logChanged(0) // a change appended, not committed
 	call := genstatem.Call{Req: removeMember{"c"}}
 	if _, _, effs := b.HandleEvent(leader, d, call); len(effs) != 1 || effs[0] != call.Reply(busy{}) {
 		t.Errorf("a second change: %v", effs)
@@ -250,7 +250,7 @@ func TestAddRepliesOnceVoter(t *testing.T) {
 	voter := learner.promoted(idd)
 	d.term, d.commit = 1, 2
 	d.log = d.log.add(Entry{Term: 1, Config: &learner}).add(Entry{Term: 1, Config: &voter})
-	d.logChanged()
+	d.logChanged(0)
 	d.joining = []joining{{id: idd, from: from}}
 
 	if effs := d.joined(); len(effs) != 0 {
@@ -264,7 +264,7 @@ func TestAddRepliesOnceVoter(t *testing.T) {
 	d.joining = []joining{{id: idd, from: from}}
 	removed := voter.without(idd)
 	d.log = d.log.add(Entry{Term: 1, Config: &removed})
-	d.logChanged()
+	d.logChanged(0)
 	d.commit = 2 // as if the voter were not committed, only the learner
 	if effs := d.joined(); len(effs) != 1 || effs[0].(actor.Reply).Value == (applied{}) {
 		t.Fatalf("removed: %v", effs)

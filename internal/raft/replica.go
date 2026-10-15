@@ -148,7 +148,7 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		d.log = raftLog{start: snap.Index, startTerm: snap.Term, startConfig: snap.Config, entries: saved.Log}
 		d.commit, d.applied = snap.Index, snap.Index
 	}
-	d.logChanged()
+	d.logChanged(0)
 	d.stable = d.log.lastIndex()
 	effs := actor.Do(actor.MonitorNodes{On: true})
 	if !d.id.IsZero() {
@@ -180,9 +180,22 @@ func (d *replica[S]) left() bool {
 	return !d.config.has(d.id) && d.configAt <= d.commit
 }
 
-// logChanged keeps the configuration of the member that of its log.
-func (d *replica[S]) logChanged() {
-	d.config, d.configAt = d.log.config()
+// logChanged keeps the configuration of the member that of its log,
+// which changed from index from on: the latest of those entries, if one
+// is a configuration, or the one in force still, unless it changed too.
+// Not looking back through the log, a member gets an entry at the cost of
+// it alone, however long its log.
+func (d *replica[S]) logChanged(from uint64) {
+	if from <= d.configAt {
+		d.config, d.configAt = d.log.config() // the one in force changed: look back for it
+		return
+	}
+	for i := d.log.lastIndex(); i >= from; i-- {
+		if c := d.log.at(i).Config; c != nil {
+			d.config, d.configAt = *c, i
+			return
+		}
+	}
 }
 
 func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.Event) (role, replica[S], []actor.Effect) {

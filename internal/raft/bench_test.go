@@ -31,3 +31,20 @@ func BenchmarkLeader(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkFollower has a follower with SnapshotEvery entries in its log
+// take the leader's entries, one a message: what an entry costs it.
+func BenchmarkFollower(b *testing.B) {
+	bf, d := member(b)
+	bf.spec.Storage = nil
+	d = withCommands(d, DefaultSnapshotEvery)
+	d.logChanged(0)
+	var effs []actor.Effect
+	for b.Loop() {
+		last := d.log.lastIndex()
+		m := appendEntries{Term: 1, Leader: ida, To: idb, PrevIndex: last, PrevTerm: 1,
+			Entries: []Entry{{Term: 1, Cmd: 1}}, Commit: last}
+		_, d, effs = bf.HandleEvent(follower, d, genstatem.Info{Msg: m})
+		_ = effs
+	}
+}

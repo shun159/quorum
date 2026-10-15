@@ -53,7 +53,7 @@ func leading(t testing.TB) (behaviour[int, int, int], replica[int]) {
 	b, d := member(t)
 	d.term, d.leader = 1, idb
 	d.log = d.log.add(Entry{Term: 1})
-	d.logChanged()
+	d.logChanged(0)
 	d.commit, d.applied, d.stable, d.state = 2, 2, 2, 3
 	d.peers = []peer{{id: ida, next: 3, match: 2}, {id: idc, next: 3, match: 2}}
 	return b, d
@@ -86,7 +86,7 @@ func TestReadConfirmed(t *testing.T) {
 func TestReadNewLeader(t *testing.T) {
 	b, d := leading(t)
 	d.log = d.log.add(Entry{Term: 2})
-	d.logChanged()
+	d.logChanged(0)
 	d.term = 2
 	_, _, effs := b.HandleEvent(leader, d, genstatem.Call{From: reader, Req: read{0}})
 	if len(effs) != 1 || effs[0] != (actor.Reply{To: reader, Value: busy{}}) {

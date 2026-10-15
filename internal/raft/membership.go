@@ -48,7 +48,7 @@ func (b behaviour[S, Cmd, Rep]) found(r role, d replica[S], c genstatem.Call, m 
 	}
 	config := Config{Voters: slices.Clone(m.Config.Voters), Learners: slices.Clone(m.Config.Learners)}
 	d.log = logOf(Entry{Term: 0, Config: &config})
-	d.logChanged()
+	d.logChanged(0)
 	effs := b.saveLog(&d, 1)
 	return r, d, append(effs, d.after(c.Reply(applied{}))...)
 }
@@ -174,7 +174,7 @@ func (b behaviour[S, Cmd, Rep]) promote(r role, d *replica[S], p peer) []actor.E
 // learn they are out, until it is committed.
 func (b behaviour[S, Cmd, Rep]) appendConfig(r role, d *replica[S], config Config) []actor.Effect {
 	d.log = d.log.add(b.entry(d, Entry{Config: &config}))
-	d.logChanged()
+	d.logChanged(d.log.lastIndex())
 	for _, id := range d.others() {
 		if d.peer(id) == nil {
 			d.peers = append(d.peers, peer{id: id, next: d.log.lastIndex(), heardIn: d.round})
