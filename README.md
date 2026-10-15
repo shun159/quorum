@@ -1,12 +1,33 @@
 # quorum
 
 quorum replicates a state machine over the nodes of a group, by the Raft
-consensus algorithm, on [molecule](https://github.com/shun159/molecule).
+consensus algorithm, on [molecule](https://github.com/shun159/molecule):
+any state machine, of the application's own types, run in the
+application's own processes. An application builds on it what must stay
+one and the same across its nodes, and go on while some of them fail.
 
 The machine is pure: it takes a state and a command and returns the next
 state, a reply, and effects, which only the leader performs. A whole group
 runs in a gensim simulation as well, where the safety of Raft is checked
-under partitions and lost messages, in orders searched by the fuzzer.
+under partitions and lost messages, in orders searched by the fuzzer; and
+over real processes, killed, paused and cut off, checked linearizable.
+
+## What it is for
+
+etcd, or ZooKeeper, is a server of keys and values that applications use
+from outside: their state is put into its keys, kept consistent by its
+transactions. quorum is a library: the application's state is the
+machine's, a lock table, a queue of jobs, a routing table, the steps of a
+workflow, replicated as it is; the leader acts on the world for the group,
+a singleton without a coordinator; and a member is a molecule process, in
+the application's supervision tree, tested in its simulations.
+
+It is not a database. The state of a group is held in memory, the
+application's to shape: of the order of a GB a group, as measured below.
+Writes go through one leader a group, and spread over groups as a key
+says: groups cost nothing idle, and a node holds thousands. etcd takes
+more writes in its one group, and serves keys, ranges, watches and leases
+ready-made; quorum is what the application's own machine needs, under it.
 
 ## Machines
 
@@ -14,8 +35,8 @@ quorum replicates any state machine: a map, a lock service, a store of
 configuration, a counter handing out numbers, a queue, a job one node runs
 at a time. A machine is what a group is for, as a behaviour is what a
 process is for: quorum agrees on the commands, the machine decides what
-they do. It suits state that must stay consistent, of a moderate size,
-kept by a few nodes, any of which may fail.
+they do. It suits state that must stay consistent, held in memory, kept
+by a group of three or five nodes, any of which may fail.
 
 What it asks of a machine:
 
@@ -29,8 +50,11 @@ What it asks of a machine:
 - **Registered types.** The state, commands and replies go between nodes and
   to disk: their types are registered with `dist.Register`, and only their
   exported fields are kept.
-- **A moderate size.** The state is held whole in memory, and sent whole to
-  a member that needs it. quorum is not a store of much data.
+- **Held in memory.** The state is held whole in memory, never changed in
+  place: a large one is better of a structure that changes at the cost of
+  what changed, as molecule's `pmap.Map`, and an `Encoder`, encoding itself
+  for its snapshots, which are written in the background and sent in
+  chunks.
 - **One leader a group.** A group applies its commands one at a time; a load
   too much for one is spread over groups, by a hash of a key say, which
   agree on nothing together.
@@ -80,4 +104,25 @@ instead, each applied once however often it is sent again.
 locks spread over eight groups, each led on any node, which agree on who
 holds each lock, with fencing tokens, while any one node is down.
 
-Work in progress: see the package documentation for what there is not yet.
+## How far it goes
+
+Measured on one 8-core laptop, the three nodes of a group and the clients
+on it, a group on an NVMe disk, with the commands in
+[internal/cmd](internal/cmd):
+
+- **A command** takes about 2 ms, synced on a majority of disks; a group
+  takes some 9,000 a second from 64 clients at once (in memory, without
+  disks: 25,000).
+- **Many groups**: 100 groups take some 7,000 commands a second together
+  on disk (30,000 in memory); idle, a thousand groups a node cost no
+  messages and 0.3% of a core.
+- **A million keys** of 100 bytes in a group (`internal/cmd/kv`): taken at
+  4,500 a second, about 1 GB of memory a node, written among at 4,000 a
+  second, p99 100 ms; the group writes again 3 s after all its nodes were
+  killed.
+- **A state of 500 MB** is sent to a member added in 1.3 s, the other
+  groups of the nodes undisturbed.
+- **A node lost**: its groups elect other leaders in 0.5 s, killed; 1–1.5 s,
+  frozen silent.
+
+Work in progress.
