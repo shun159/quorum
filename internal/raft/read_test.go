@@ -48,7 +48,7 @@ func TestReadNotReader(t *testing.T) {
 
 // leading returns the member b as the leader of term 1, its entry of the
 // term committed, holding 3, with a and c its peers.
-func leading(t *testing.T) (behaviour[int, int, int], replica[int]) {
+func leading(t testing.TB) (behaviour[int, int, int], replica[int]) {
 	t.Helper()
 	b, d := member(t)
 	d.term, d.leader = 1, idb

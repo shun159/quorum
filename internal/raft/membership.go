@@ -109,6 +109,9 @@ func (b behaviour[S, Cmd, Rep]) change(r role, d replica[S], c genstatem.Call, m
 // joined replies to the additions of members now voters by the
 // configuration committed, and of members removed since.
 func (d *replica[S]) joined() []actor.Effect {
+	if len(d.joining) == 0 {
+		return nil
+	}
 	committed := d.log.configUpTo(d.commit)
 	var effs []actor.Effect
 	var waiting []joining
