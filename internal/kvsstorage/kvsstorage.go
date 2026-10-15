@@ -48,7 +48,7 @@ func (k Key) Compare(o Key) int {
 // started on the node, being deleted from it if Deleting.
 type Record struct {
 	State    raft.State
-	Snapshot raft.Snapshot
+	Snapshot raft.SavedSnapshot
 	Entry    raft.Entry
 	Deleting bool
 }
@@ -131,8 +131,8 @@ func (s storage) Load() (raft.Saved, error) {
 }
 
 func (s storage) SaveState(st raft.State, tag any) actor.Effect {
-	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
-		return []write{put(s.key(KindState, 0), Record{State: st})}
+	return writesEffect{s: s, tag: tag, writes: func(t *Table) ([]write, error) {
+		return []write{put(s.key(KindState, 0), Record{State: st})}, nil
 	}}
 }
 
@@ -147,7 +147,7 @@ func (s storage) Durable(msg any) (any, error, bool) {
 // them, the log left on disk is the start of the old one, or of the new
 // one, never old entries after new ones.
 func (s storage) Append(index uint64, entries []raft.Entry, tag any) actor.Effect {
-	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
+	return writesEffect{s: s, tag: tag, writes: func(t *Table) ([]write, error) {
 		var writes []write
 		for _, k := range slices.Backward(s.keys(t, index)) {
 			writes = append(writes, del(k))
@@ -155,22 +155,26 @@ func (s storage) Append(index uint64, entries []raft.Entry, tag any) actor.Effec
 		for i, e := range entries {
 			writes = append(writes, put(s.key(KindEntry, index+uint64(i)), Record{Entry: e}))
 		}
-		return writes
+		return writes, nil
 	}}
 }
 
-// SaveSnapshot returns the effect putting snap, then deleting the entries
-// up to its index, which Load skips meanwhile.
-func (s storage) SaveSnapshot(snap raft.Snapshot, tag any) actor.Effect {
-	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
-		writes := []write{put(s.key(KindSnapshot, 0), Record{Snapshot: snap})}
+// SaveSnapshot returns the effect putting the snapshot encode encodes,
+// then deleting the entries up to index, which Load skips meanwhile.
+func (s storage) SaveSnapshot(index uint64, encode func() (raft.Encoded, error), tag any) actor.Effect {
+	return writesEffect{s: s, tag: tag, writes: func(t *Table) ([]write, error) {
+		enc, err := encode()
+		if err != nil {
+			return nil, err
+		}
+		writes := []write{put(s.key(KindSnapshot, 0), Record{Snapshot: raft.SavedSnapshot{Index: index, Encoded: enc}})}
 		for _, k := range s.keys(t, 1) {
-			if k.Index > snap.Index {
+			if k.Index > index {
 				break
 			}
 			writes = append(writes, del(k))
 		}
-		return writes
+		return writes, nil
 	}}
 }
 
@@ -197,7 +201,7 @@ type writesEffect struct {
 	actor.Extension
 	s      storage
 	tag    any
-	writes func(*Table) []write
+	writes func(*Table) ([]write, error)
 }
 
 func (e writesEffect) Perform(env gen.Env) {
@@ -206,5 +210,10 @@ func (e writesEffect) Perform(env gen.Env) {
 		env.Send(env.Self(), kvs.Durable{Tag: e.tag, Err: err})
 		return
 	}
-	t.WritesEffect(e.tag, e.writes(t)...).(gen.Performer).Perform(env)
+	writes, err := e.writes(t)
+	if err != nil {
+		env.Send(env.Self(), kvs.Durable{Tag: e.tag, Err: err})
+		return
+	}
+	t.WritesEffect(e.tag, writes...).(gen.Performer).Perform(env)
 }

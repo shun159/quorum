@@ -62,7 +62,7 @@ func TestVoteWaitsForDurable(t *testing.T) {
 	if msgs := sent(effs); len(msgs) != 0 {
 		t.Fatalf("told %v before the vote was saved", msgs)
 	}
-	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
+	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{tag: written(t, effs)}})
 	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (voteReply{Term: 1, From: idb, Granted: true}) {
 		t.Errorf("once saved, told %v", msgs)
 	}
@@ -77,7 +77,7 @@ func TestAckWaitsForDurable(t *testing.T) {
 	if msgs := sent(effs); len(msgs) != 0 {
 		t.Fatalf("told %v before the entries were saved", msgs)
 	}
-	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
+	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{tag: written(t, effs)}})
 	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (appendReply{Term: 1, From: idb, Success: true, Match: 2}) {
 		t.Errorf("once saved, told %v", msgs)
 	}
@@ -90,7 +90,7 @@ func TestStandWaitsForDurable(t *testing.T) {
 	if r != candidate || len(sent(effs)) != 0 {
 		t.Fatalf("%v, told %v before its vote was saved", r, sent(effs))
 	}
-	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
+	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{tag: written(t, effs)}})
 	if msgs := sent(effs); len(msgs) != 2 {
 		t.Errorf("once saved, told %v", msgs)
 	}
@@ -110,7 +110,7 @@ func TestLeaderCountsItselfOnceDurable(t *testing.T) {
 	if d.commit != 0 {
 		t.Fatalf("committed %d before its entry was saved", d.commit)
 	}
-	_, d, _ = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{tag}})
+	_, d, _ = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{tag: tag}})
 	if d.commit != 2 {
 		t.Errorf("commit %d once saved, want 2", d.commit)
 	}

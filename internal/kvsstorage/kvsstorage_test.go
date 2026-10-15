@@ -2,6 +2,7 @@ package kvsstorage
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -120,8 +121,9 @@ func TestSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := For(table, "g")
-	snap := raft.Snapshot{Index: 2, Term: 1, Config: raft.Config{Voters: []proc.PID{voted}}, State: 42}
-	save(t, g, g.Append(1, entries(1, 1, 1, 2), 1), g.SaveSnapshot(snap, 2))
+	enc := raft.Encoded{Head: []byte("head"), State: []byte("state")}
+	encode := func() (raft.Encoded, error) { return enc, nil }
+	save(t, g, g.Append(1, entries(1, 1, 1, 2), 1), g.SaveSnapshot(2, encode, 2))
 	if err := table.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +137,7 @@ func TestSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Snapshot.Index != 2 || saved.Snapshot.State != 42 || len(saved.Snapshot.Config.Voters) != 1 {
+	if saved.Snapshot.Index != 2 || string(saved.Snapshot.Head) != "head" || string(saved.Snapshot.State) != "state" {
 		t.Errorf("snapshot loaded %+v", saved.Snapshot)
 	}
 	if want := entries(1, 1, 1, 2)[2:]; !slices.Equal(saved.Log, want) {
@@ -157,9 +159,9 @@ func TestSnapshotFailing(t *testing.T) {
 	defer table.Close()
 	g := For(table, "g")
 	save(t, g, g.Append(1, entries(1, 1, 1), 1))
-	bad := raft.Snapshot{Index: 2, Term: 1, State: func() {}}
-	if err := saving(t, g, g.SaveSnapshot(bad, 2)); err == nil {
-		t.Fatal("saved a snapshot of a func")
+	bad := func() (raft.Encoded, error) { return raft.Encoded{}, errors.New("no encoding") }
+	if err := saving(t, g, g.SaveSnapshot(2, bad, 2)); err == nil {
+		t.Fatal("saved a snapshot failing to encode")
 	}
 	saved, err := g.Load()
 	if err != nil || saved.Snapshot.Index != 0 || !slices.Equal(saved.Log, entries(1, 1, 1)) {
