@@ -50,6 +50,7 @@ type replica[S any] struct {
 	joining []joining  // members added, to reply to once voters, as the leader
 	reads   []reading  // reads to answer, as the leader
 	readSeq uint64     // its last round of confirming reads, as the leader
+	timeAt  uint64     // the entry bringing the time of the log to its clock, for reads, as the leader
 	round   uint64     // of the checks of the quorum, as the leader
 
 	transfer *transferring // the leader handing over, if it is

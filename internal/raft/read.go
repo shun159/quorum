@@ -24,9 +24,10 @@ func Read[Rep, Cmd any](ctx context.Context, caller actor.Caller, group string, 
 // then, so no later leader had committed more than it had. Applying what
 // it commits at once, it holds all that was committed when the read came.
 type reading struct {
-	seq  uint64
-	cmd  any
-	from actor.From
+	seq   uint64
+	after uint64 // the entry of the time it reads at, applied first, if not 0
+	cmd   any
+	from  actor.From
 }
 
 // read handles a read. The leader begins a round of heartbeats to learn
@@ -44,9 +45,32 @@ func (b behaviour[S, Cmd, Rep]) read(r role, d replica[S], c genstatem.Call, m r
 		return r, d, actor.Do(c.Reply(busy{}))
 	}
 	d.readSeq++
-	d.reads = append(d.reads, reading{seq: d.readSeq, cmd: m.Cmd, from: c.From})
-	effs := b.replicate(&d)
+	after, effs := b.timeForRead(&d)
+	d.reads = append(d.reads, reading{seq: d.readSeq, after: after, cmd: m.Cmd, from: c.From})
+	effs = append(effs, b.replicate(&d)...)
 	return r, d, append(effs, b.serveReads(&d)...)
+}
+
+// timeForRead brings the time of the log to the leader's clock, for a
+// read of a TimedReader, if behind it by more than Heartbeat: it appends
+// an entry of its time, and returns its index, for the read to wait until
+// it is applied; or the one on its way. A read at the time of the log,
+// every command after it is applied at a time no earlier, whatever the
+// clock of the leader then; at the clock of a leader ahead of the next,
+// commands would go back in time from it.
+func (b behaviour[S, Cmd, Rep]) timeForRead(d *replica[S]) (uint64, []actor.Effect) {
+	if _, ok := b.spec.Machine.(TimedReader[S, Cmd, Rep]); !ok || b.now == nil {
+		return 0, nil
+	}
+	if d.timeAt > d.applied {
+		return d.timeAt, nil
+	}
+	if b.now().UnixNano()-d.sessions.Time <= int64(b.spec.Heartbeat) {
+		return 0, nil
+	}
+	d.log = d.log.add(b.entry(d, Entry{}))
+	d.timeAt = d.log.lastIndex()
+	return d.timeAt, b.saveLog(d, d.timeAt)
 }
 
 // unreadable tells why the group cannot read cmd, if it cannot.
@@ -69,7 +93,7 @@ func (b behaviour[S, Cmd, Rep]) serveReads(d *replica[S]) []actor.Effect {
 	var effs []actor.Effect
 	var waiting []reading
 	for _, rd := range d.reads {
-		if !d.confirmed(rd.seq) {
+		if !d.confirmed(rd.seq) || rd.after > d.applied {
 			waiting = append(waiting, rd)
 			continue
 		}
