@@ -9,7 +9,7 @@ func init() {
 	dist.Register(preVote{}, preVoteReply{}, requestVote{}, voteReply{}, appendEntries{}, appendReply{},
 		whoLeads{}, command{}, read{}, applied{}, expired{}, openSession{}, Origin{}, redirect{}, deposed{}, rejected{},
 		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{},
-		installSnapshot{}, transferLeader{}, timeoutNow{})
+		installSnapshot{}, snapshotAck{}, transferLeader{}, timeoutNow{})
 }
 
 // The messages between the members of a group, the RPCs of Raft, sent as
@@ -53,14 +53,27 @@ type (
 		Read      uint64
 		Quiet     bool
 	}
-	// installSnapshot gives the member To the leader's snapshot, in place
-	// of the entries it misses, which the leader has no more. It is
-	// answered with an appendReply.
+	// installSnapshot gives the member To a chunk of the leader's
+	// snapshot of the entries up to Index, in place of the entries it
+	// misses, which the leader has no more: Data, from byte Offset of the
+	// Size of the snapshot encoded. A snapshotAck answers each but the
+	// last, an appendReply the last, once the snapshot is saved.
 	installSnapshot struct {
-		Term     uint64
-		Leader   proc.PID
-		To       proc.PID
-		Snapshot Snapshot
+		Term   uint64
+		Leader proc.PID
+		To     proc.PID
+		Index  uint64
+		Offset int
+		Size   int
+		Data   []byte
+	}
+	// snapshotAck tells the leader that From has the snapshot of Index up
+	// to byte Offset.
+	snapshotAck struct {
+		Term   uint64
+		From   proc.PID
+		Index  uint64
+		Offset int
 	}
 	// timeoutNow tells the member To, which holds all the log of the
 	// leader of Term, to stand at once: the leader hands over to it.
@@ -91,6 +104,7 @@ func (m appendEntries) term() uint64 { return m.Term }
 func (m appendReply) term() uint64   { return m.Term }
 
 func (m installSnapshot) term() uint64 { return m.Term }
+func (m snapshotAck) term() uint64     { return m.Term }
 func (m timeoutNow) term() uint64      { return m.Term }
 
 // addressed is a message to one member, which a member other than To on
