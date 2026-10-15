@@ -177,29 +177,35 @@ func (d *replica[S]) peer(id proc.PID) *peer {
 // earlier term is never committed by counting, only by one of the term
 // after it: a majority may hold it, yet a later leader may not.
 func (b behaviour[S, Cmd, Rep]) commit(r role, d *replica[S]) []actor.Effect {
-	for n := d.log.lastIndex(); n > d.commit && d.log.termAt(n) == d.term; n-- {
-		if d.holders(n) >= d.config.majority() {
-			d.commit = n
-			d.prunePeers()
-			return b.apply(r, d)
-		}
+	// The terms of the log only go up: below an entry of an earlier term,
+	// none is of this one.
+	if n := d.heldByMajority(); n > d.commit && d.log.termAt(n) == d.term {
+		d.commit = n
+		d.prunePeers()
+		return b.apply(r, d)
 	}
 	return nil
 }
 
-// holders counts the voters known to hold the entry at index n: the
-// leader, once it is durable there, and the others matching it that far.
-func (d *replica[S]) holders(n uint64) int {
-	count := 0
-	if d.config.isVoter(d.id) && d.stable >= n {
-		count++
+// heldByMajority returns the last index a majority of the voters is known
+// to hold: the leader, once durable there, and the others as far as they
+// match.
+func (d *replica[S]) heldByMajority() uint64 {
+	held := make([]uint64, 0, len(d.peers)+1)
+	if d.config.isVoter(d.id) {
+		held = append(held, d.stable)
 	}
 	for _, p := range d.peers {
-		if d.config.isVoter(p.id) && p.match >= n {
-			count++
+		if d.config.isVoter(p.id) {
+			held = append(held, p.match)
 		}
 	}
-	return count
+	m := d.config.majority()
+	if len(held) < m {
+		return 0
+	}
+	slices.Sort(held)
+	return held[len(held)-m]
 }
 
 // apply applies the entries committed, not applied yet. The leader also

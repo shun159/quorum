@@ -13,7 +13,7 @@ var ida, idb, idc = proc.NewNode("a").NewPID(), proc.NewNode("b").NewPID(), proc
 
 // member returns the member b of a group of three, founded, its storage
 // in memory: a behaviour is pure, its events handled by hand.
-func member(t *testing.T) (behaviour[int, int, int], replica[int]) {
+func member(t testing.TB) (behaviour[int, int, int], replica[int]) {
 	t.Helper()
 	spec := Spec[int, int, int]{Group: "g", Machine: counter{}, Storage: &memStorage{}}
 	b := behaviour[int, int, int]{spec: spec.withDefaults()}
