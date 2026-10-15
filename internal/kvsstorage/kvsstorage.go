@@ -48,7 +48,7 @@ func (k Key) Compare(o Key) int {
 // started on the node, being deleted from it if Deleting.
 type Record struct {
 	State    raft.State
-	Snapshot raft.SavedSnapshot
+	Snapshot uint64 // the index of the snapshot, kept in its file
 	Entry    raft.Entry
 	Deleting bool
 }
@@ -118,7 +118,11 @@ func (s storage) Load() (raft.Saved, error) {
 		case k.Kind == KindState:
 			saved.State = r.State
 		case k.Kind == KindSnapshot:
-			saved.Snapshot = r.Snapshot
+			enc, err := readSnapshot(s.snapshotDir(t), r.Snapshot)
+			if err != nil {
+				return raft.Saved{}, fmt.Errorf("kvsstorage: group %s cannot read its snapshot: %w", s.group, err)
+			}
+			saved.Snapshot = raft.SavedSnapshot{Index: r.Snapshot, Encoded: enc}
 		case k.Index <= saved.Snapshot.Index:
 		case k.Index == saved.Snapshot.Index+uint64(len(saved.Log))+1:
 			saved.Log = append(saved.Log, r.Entry)
@@ -159,15 +163,19 @@ func (s storage) Append(index uint64, entries []raft.Entry, tag any) actor.Effec
 	}}
 }
 
-// SaveSnapshot returns the effect putting the snapshot encode encodes,
-// then deleting the entries up to index, which Load skips meanwhile.
+// SaveSnapshot returns the effect writing the file of the snapshot encode
+// encodes, then putting its record, and deleting the entries up to index,
+// which Load skips meanwhile.
 func (s storage) SaveSnapshot(index uint64, encode func() (raft.Encoded, error), tag any) actor.Effect {
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) ([]write, error) {
 		enc, err := encode()
 		if err != nil {
 			return nil, err
 		}
-		writes := []write{put(s.key(KindSnapshot, 0), Record{Snapshot: raft.SavedSnapshot{Index: index, Encoded: enc}})}
+		if err := writeSnapshot(s.snapshotDir(t), index, enc); err != nil {
+			return nil, err
+		}
+		writes := []write{put(s.key(KindSnapshot, 0), Record{Snapshot: index})}
 		for _, k := range s.keys(t, 1) {
 			if k.Index > index {
 				break
