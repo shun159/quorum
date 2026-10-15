@@ -1,6 +1,7 @@
 package kvsstorage
 
 import (
+	"os"
 	"strings"
 
 	"github.com/shun159/molecule/kvs"
@@ -61,6 +62,9 @@ func Forget(dir, group string) error {
 		if err := t.Delete(keys[i]); err != nil {
 			return err
 		}
+	}
+	if err := os.RemoveAll(s.snapshotDir(t)); err != nil {
+		return err
 	}
 	return t.Delete(registration(group))
 }

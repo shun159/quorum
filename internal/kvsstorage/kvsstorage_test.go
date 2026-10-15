@@ -3,6 +3,9 @@ package kvsstorage
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -226,10 +229,14 @@ func TestRegistered(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := In(dir, g)
-		save(t, st, st.SaveState(raft.State{Term: 1}, 1), st.Append(1, entries(1, 1), 2))
+		encode := func() (raft.Encoded, error) { return raft.Encoded{Head: []byte(g)}, nil }
+		save(t, st, st.SaveState(raft.State{Term: 1}, 1), st.Append(1, entries(1, 1, 1), 2), st.SaveSnapshot(1, encode, 3))
 	}
 	if err := Forget(dir, "y"); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "snapshots", "y")); !os.IsNotExist(err) {
+		t.Errorf("the snapshots of y forgotten stay: %v", err)
 	}
 	started, deleting, err := Registered(dir)
 	if err != nil || !slices.Equal(started, []string{"x", "z"}) || len(deleting) != 0 {
@@ -238,7 +245,7 @@ func TestRegistered(t *testing.T) {
 	if saved, _ := In(dir, "y").Load(); saved.State.Term != 0 || len(saved.Log) != 0 {
 		t.Errorf("y forgotten, loaded %+v", saved)
 	}
-	if saved, _ := In(dir, "x").Load(); len(saved.Log) != 2 {
+	if saved, _ := In(dir, "x").Load(); len(saved.Log) != 2 || string(saved.Snapshot.Head) != "x" {
 		t.Errorf("x loaded %+v", saved)
 	}
 
@@ -248,5 +255,39 @@ func TestRegistered(t *testing.T) {
 	}
 	if started, deleting, _ := Registered(dir); !slices.Equal(started, []string{"x"}) || !slices.Equal(deleting, []string{"z"}) {
 		t.Errorf("registered %v, deleting %v", started, deleting)
+	}
+}
+
+// A snapshot is kept in a file of its own, the latest few kept; a file
+// changed fails Load.
+func TestSnapshotFiles(t *testing.T) {
+	dir := t.TempDir()
+	table, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer table.Close()
+	g := For(table, "a/b")
+	save(t, g, g.Append(1, entries(1, 1, 1, 1, 1, 1, 1, 1), 1))
+	for i := range uint64(4) {
+		index := 2 * (i + 1)
+		enc := raft.Encoded{Head: []byte("head"), State: []byte(fmt.Sprint("state ", index))}
+		save(t, g, g.SaveSnapshot(index, func() (raft.Encoded, error) { return enc, nil }, 2+i))
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "snapshots", "a%2Fb", "*"))
+	if len(files) != 3 {
+		t.Errorf("files kept: %v; want the 3 latest", files)
+	}
+	saved, err := g.Load()
+	if err != nil || saved.Snapshot.Index != 8 || string(saved.Snapshot.State) != "state 8" || len(saved.Log) != 0 {
+		t.Fatalf("loaded %+v, %v; want the snapshot of 8", saved.Snapshot, err)
+	}
+
+	last := files[len(files)-1]
+	b, _ := os.ReadFile(last)
+	b[len(b)-5] ^= 1
+	os.WriteFile(last, b, 0o644)
+	if _, err := g.Load(); err == nil {
+		t.Error("loaded a snapshot changed on disk")
 	}
 }
