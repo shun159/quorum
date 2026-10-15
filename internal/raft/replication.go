@@ -26,7 +26,7 @@ func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
 	if l, ok := b.spec.Machine.(Leader[S]); ok {
 		effs = append(effs, l.Elected(d.state, d.term)...)
 	}
-	effs = append(effs, b.replicate(*d)...)
+	effs = append(effs, b.replicate(d)...)
 	return append(effs, b.commit(leader, d)...)
 }
 
@@ -43,6 +43,11 @@ func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
 	for _, rd := range d.reads {
 		effs = append(effs, actor.Reply{To: rd.from, Value: redirect{}}) // to read again
 	}
+	for _, p := range d.peers {
+		if p.sending != 0 {
+			effs = append(effs, actor.Demonitor{Tag: snapshotTo{p.id}})
+		}
+	}
 	d.pending, d.joining, d.reads, d.peers = nil, nil, nil, nil
 	if l, ok := b.spec.Machine.(Leader[S]); ok {
 		effs = append(effs, l.Surrendered(d.state)...)
@@ -52,27 +57,27 @@ func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
 
 // heartbeat sends every other member what it misses, nothing if it is up
 // to date, for it to know the leader lives.
-func (b behaviour[S, Cmd, Rep]) heartbeat(d replica[S]) []actor.Effect {
+func (b behaviour[S, Cmd, Rep]) heartbeat(d *replica[S]) []actor.Effect {
 	return append(b.replicate(d), genstatem.StartStateTimeout{After: b.spec.Heartbeat})
 }
 
 // replicate sends every other member the entries it misses.
-func (b behaviour[S, Cmd, Rep]) replicate(d replica[S]) []actor.Effect {
+func (b behaviour[S, Cmd, Rep]) replicate(d *replica[S]) []actor.Effect {
 	var effs []actor.Effect
 	for _, p := range d.peers {
-		effs = append(effs, b.appendTo(d, p))
+		effs = append(effs, b.appendTo(d, p)...)
 	}
 	return effs
 }
 
 // appendTo sends p the entries from its next one on, after the one before,
 // or the snapshot, if the leader has them no more.
-func (b behaviour[S, Cmd, Rep]) appendTo(d replica[S], p peer) actor.Effect {
+func (b behaviour[S, Cmd, Rep]) appendTo(d *replica[S], p peer) []actor.Effect {
 	if p.next <= d.log.start {
-		return b.send(p.id, installSnapshot{Term: d.term, Leader: d.id, To: p.id, Snapshot: d.snapshot})
+		return b.sendSnapshot(d, p)
 	}
 	prev := p.next - 1
-	return b.send(p.id, appendEntries{
+	return actor.Do(b.send(p.id, appendEntries{
 		Term:      d.term,
 		Leader:    d.id,
 		To:        p.id,
@@ -82,7 +87,7 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d replica[S], p peer) actor.Effect {
 		Commit:    d.commit,
 		Read:      d.readSeq,
 		Quiet:     d.quiet,
-	})
+	}))
 }
 
 // appendEntries takes the entries of the leader, if the log matches the
@@ -126,16 +131,19 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 	}
 	d.heard(p)
 	p.read = max(p.read, m.Read)
+	effs := p.snapshotArrived(m)
 	if !m.Success {
 		p.next = max(1, min(p.next-1, m.LastIndex+1))
-		return r, d, append(b.serveReads(&d), b.appendTo(d, *p))
+		effs = append(effs, b.serveReads(&d)...)
+		return r, d, append(effs, b.appendTo(&d, *p)...)
 	}
 	p.match = max(p.match, m.Match)
 	p.next = max(p.next, p.match+1)
 	progress := *p
-	effs := append(b.serveReads(&d), b.commit(r, &d)...)
+	effs = append(effs, b.serveReads(&d)...)
+	effs = append(effs, b.commit(r, &d)...)
 	if progress.next <= d.log.lastIndex() {
-		effs = append(effs, b.appendTo(d, progress))
+		effs = append(effs, b.appendTo(&d, progress)...)
 	}
 	effs = append(effs, b.handOver(&d)...)
 	return r, d, append(effs, b.promote(r, &d, progress)...)

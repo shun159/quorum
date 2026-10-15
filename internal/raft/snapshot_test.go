@@ -3,6 +3,7 @@ package raft
 import (
 	"testing"
 
+	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/genstatem"
 	"github.com/shun159/molecule/proc"
 )
@@ -57,5 +58,49 @@ func TestInstallSnapshot(t *testing.T) {
 			t.Errorf("%s: log from %d to %d, state %d applied to %d; want to %d, 7 applied to 3",
 				c.name, d.log.start, d.log.lastIndex(), d.state, d.applied, c.wantEnd)
 		}
+	}
+}
+
+// The leader sends its snapshot once, not each beat until it arrives, nor
+// for a reply sent before it did; again if the member dies meanwhile.
+func TestSnapshotOnItsWay(t *testing.T) {
+	b, d := leading(t)
+	b.spec.SnapshotEvery = 1
+	b.takeSnapshot(&d)
+	d.peers[0] = peer{id: ida, next: 1}
+	snapshots := func(ev genstatem.Event) int {
+		t.Helper()
+		var effs []actor.Effect
+		_, d, effs = b.HandleEvent(leader, d, ev)
+		n := 0
+		for _, m := range sent(effs) {
+			if _, ok := m.(installSnapshot); ok {
+				n++
+			}
+		}
+		return n
+	}
+	beat := genstatem.StateTimeout{}
+	stale := genstatem.Info{Msg: appendReply{Term: 1, From: ida}}
+	lost := genstatem.Info{Msg: actor.Down{Tag: snapshotTo{ida}}}
+	arrived := genstatem.Info{Msg: appendReply{Term: 1, From: ida, Success: true, Match: 2}}
+	for i, c := range []struct {
+		name string
+		ev   genstatem.Event
+		want int
+	}{
+		{"first beat", beat, 1},
+		{"next beat", beat, 0},
+		{"stale reply", stale, 0},
+		{"member died", lost, 0},
+		{"beat after", beat, 1},
+		{"arrived", arrived, 0},
+	} {
+		if n := snapshots(c.ev); n != c.want {
+			t.Errorf("%d %s: %d snapshots sent, want %d", i, c.name, n, c.want)
+		}
+	}
+	if p := d.peer(ida); p.sending != 0 || p.match != 2 {
+		t.Errorf("after it arrived: sending %d, match %d; want 0, 2", p.sending, p.match)
 	}
 }

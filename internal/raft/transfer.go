@@ -82,7 +82,7 @@ func (b behaviour[S, Cmd, Rep]) handOver(d *replica[S]) []actor.Effect {
 		return nil
 	}
 	if p.match < d.log.lastIndex() {
-		return actor.Do(b.appendTo(*d, *p))
+		return b.appendTo(d, *p)
 	}
 	d.transfer = &transferring{to: t.to, from: t.from, told: true}
 	return actor.Do(b.send(t.to, timeoutNow{Term: d.term, Leader: d.id, To: t.to}))

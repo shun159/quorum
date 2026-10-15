@@ -232,7 +232,7 @@ func (b behaviour[S, Cmd, Rep]) appendCall(r role, d *replica[S], c genstatem.Ca
 	d.log = d.log.add(b.entry(d, e))
 	d.pending = append(d.pending, pending{index: d.log.lastIndex(), from: c.From})
 	effs := b.saveLog(d, d.log.lastIndex())
-	effs = append(effs, b.replicate(*d)...)
+	effs = append(effs, b.replicate(d)...)
 	return append(effs, b.commit(r, d)...)
 }
 
