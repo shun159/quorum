@@ -51,9 +51,17 @@ func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
 }
 
 // heartbeat sends every other member what it misses, nothing if it is up
-// to date, for it to know the leader lives.
+// to date, for it to know the leader lives: but a member sent entries
+// since the last beat, which knows. A group taking commands beats less.
 func (b behaviour[S, Cmd, Rep]) heartbeat(d *replica[S]) []actor.Effect {
-	return append(b.replicate(d), genstatem.StartStateTimeout{After: b.spec.Heartbeat})
+	var effs []actor.Effect
+	for _, p := range d.peers {
+		if !p.sent {
+			effs = append(effs, b.appendTo(d, p)...)
+		}
+		d.peer(p.id).sent = false
+	}
+	return append(effs, genstatem.StartStateTimeout{After: b.spec.Heartbeat})
 }
 
 // replicate sends every other member the entries it misses.
@@ -75,8 +83,12 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d *replica[S], p peer) []actor.Effect {
 	}
 	prev := p.next - 1
 	entries := d.log.from(p.next, maxEntries)
-	if p.matched && len(entries) > 0 {
-		d.peer(p.id).next = p.next + uint64(len(entries))
+	if len(entries) > 0 {
+		q := d.peer(p.id)
+		q.sent = true
+		if p.matched {
+			q.next = p.next + uint64(len(entries))
+		}
 	}
 	return actor.Do(b.send(p.id, appendEntries{
 		Term:      d.term,
