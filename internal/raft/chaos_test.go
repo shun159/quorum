@@ -102,15 +102,20 @@ func (c client) count(o outcomes, res Result[int]) outcomes {
 }
 
 // TestChaos has a client add to a group of three or five, while members
-// are cut off or crashed at random, and messages lost, for many seeds.
+// are cut off or crashed at random, and messages lost, for many seeds;
+// each got some of its adds and reads done.
 func TestChaos(t *testing.T) {
 	for seed := range uint64(30) {
-		chaos(t, seed)
+		if o := chaos(t, seed); o.acked == 0 || o.reads == 0 {
+			t.Errorf("seed %d: %d acknowledged, %d read", seed, o.acked, o.reads)
+		}
 	}
 }
 
 // FuzzChaos is TestChaos with the order of events searched by the fuzzer,
-// the faults still those of the seed.
+// the faults still those of the seed. An order may leave the group no
+// leader the client finds for the while it runs, as a leader paused, then
+// cut off, then its disk replaced: the client need not get anything done.
 func FuzzChaos(f *testing.F) {
 	f.Add(uint64(0), []byte{})
 	f.Add(uint64(1), []byte{3, 1, 4, 1, 5, 9, 2, 6})
@@ -123,8 +128,9 @@ func FuzzChaos(f *testing.F) {
 // messages, of three members or five as the seed has it, checking it at
 // every step. Once healed and idle, the members all hold the same count,
 // which has every command acknowledged, and no more than were sent;
-// every node's member is a voter; and the group is quiet.
-func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
+// every node's member is a voter; and the group is quiet. It returns what
+// the client got done.
+func chaos(t *testing.T, seed uint64, opts ...gensim.Option) outcomes {
 	t.Helper()
 	// Three are the most fragile: one member losing a write may lose what
 	// was committed. Five see two members cut off at once.
@@ -153,6 +159,7 @@ func chaos(t *testing.T, seed uint64, opts ...gensim.Option) {
 		g.dump()
 		g.t.Fatalf("seed %d: settled, not quiet", seed)
 	}
+	return o
 }
 
 // dump logs what each member is at.
@@ -197,9 +204,6 @@ func (g *group) checkCount(seed uint64, o outcomes) {
 	}
 	if out := o.quorum.Out(); d.state < o.acked || d.state > o.acked+out {
 		g.t.Fatalf("seed %d: count %d, with %d acknowledged and %d out", seed, d.state, o.acked, out)
-	}
-	if o.acked == 0 || o.reads == 0 {
-		g.t.Errorf("seed %d: %d acknowledged, %d read", seed, o.acked, o.reads)
 	}
 	if len(o.wrong) > 0 {
 		g.t.Errorf("seed %d: read %v, of %d acknowledged and %d unknown", seed, o.wrong, o.acked, o.unknown)
