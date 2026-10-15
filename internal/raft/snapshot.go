@@ -44,7 +44,7 @@ func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d replica[S], m installS
 		ack := snapshotAck{Term: d.term, From: d.id, Index: m.Index, Offset: has}
 		return r, d, append(effs, b.send(m.Leader, ack))
 	}
-	snap, err := decodeSnapshot(d.incoming.data)
+	snap, err := b.decodeSnapshot(d.incoming.data, m.Head)
 	d.incoming = receiving{}
 	if err != nil {
 		return r, d, actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot decode a snapshot: %w", b.spec.Group, err)})

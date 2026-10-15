@@ -33,6 +33,12 @@ type Leader[S any] interface {
 	Surrendered(s S) []actor.Effect
 }
 
+// Encoder is quorum.Encoder.
+type Encoder[S any] interface {
+	EncodeState(s S) ([]byte, error)
+	DecodeState(b []byte) (S, error)
+}
+
 // applyMachine applies cmd to s, at the time of the log, if the machine is
 // Timed.
 func (b behaviour[S, Cmd, Rep]) applyMachine(s S, cmd Cmd, at int64) (S, Rep, []actor.Effect) {
