@@ -24,7 +24,7 @@ func (b behaviour[S, Cmd, Rep]) takeSnapshot(d *replica[S]) []actor.Effect {
 		Sessions: d.sessions,
 	}
 	d.log = d.log.compact(d.snapshot, true)
-	return b.saveSnapshot(d)
+	return b.compact(d)
 }
 
 var errHead = errors.New("the head of a snapshot past its end")

@@ -126,7 +126,7 @@ func TestSnapshot(t *testing.T) {
 	g := For(table, "g")
 	enc := raft.Encoded{Head: []byte("head"), State: []byte("state")}
 	encode := func() (raft.Encoded, error) { return enc, nil }
-	save(t, g, g.Append(1, entries(1, 1, 1, 2), 1), g.SaveSnapshot(2, encode, 2))
+	save(t, g, g.Append(1, entries(1, 1, 1, 2), 1), g.SaveSnapshot(2, encode, false, 2))
 	if err := table.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestSnapshotFailing(t *testing.T) {
 	g := For(table, "g")
 	save(t, g, g.Append(1, entries(1, 1, 1), 1))
 	bad := func() (raft.Encoded, error) { return raft.Encoded{}, errors.New("no encoding") }
-	if err := saving(t, g, g.SaveSnapshot(2, bad, 2)); err == nil {
+	if err := saving(t, g, g.SaveSnapshot(2, bad, false, 2)); err == nil {
 		t.Fatal("saved a snapshot failing to encode")
 	}
 	saved, err := g.Load()
@@ -230,7 +230,7 @@ func TestRegistered(t *testing.T) {
 		}
 		st := In(dir, g)
 		encode := func() (raft.Encoded, error) { return raft.Encoded{Head: []byte(g)}, nil }
-		save(t, st, st.SaveState(raft.State{Term: 1}, 1), st.Append(1, entries(1, 1, 1), 2), st.SaveSnapshot(1, encode, 3))
+		save(t, st, st.SaveState(raft.State{Term: 1}, 1), st.Append(1, entries(1, 1, 1), 2), st.SaveSnapshot(1, encode, false, 3))
 	}
 	if err := Forget(dir, "y"); err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestSnapshotFiles(t *testing.T) {
 	for i := range uint64(4) {
 		index := 2 * (i + 1)
 		enc := raft.Encoded{Head: []byte("head"), State: []byte(fmt.Sprint("state ", index))}
-		save(t, g, g.SaveSnapshot(index, func() (raft.Encoded, error) { return enc, nil }, 2+i))
+		save(t, g, g.SaveSnapshot(index, func() (raft.Encoded, error) { return enc, nil }, false, 2+i))
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "snapshots", "a%2Fb", "*"))
 	if len(files) != 3 {
@@ -289,5 +289,27 @@ func TestSnapshotFiles(t *testing.T) {
 	os.WriteFile(last, b, 0o644)
 	if _, err := g.Load(); err == nil {
 		t.Error("loaded a snapshot changed on disk")
+	}
+}
+
+// A snapshot saved in the background is saved as one in order; one older
+// than the one saved is not, but said durable.
+func TestSnapshotBackground(t *testing.T) {
+	table, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer table.Close()
+	g := For(table, "g")
+	at := func(index uint64) func() (raft.Encoded, error) {
+		return func() (raft.Encoded, error) { return raft.Encoded{Head: []byte(fmt.Sprint(index))}, nil }
+	}
+	save(t, g, g.Append(1, entries(1, 1, 1, 1, 1, 1, 1, 1), 1), g.SaveSnapshot(6, at(6), true, "compacted"))
+	if saved, err := g.Load(); err != nil || saved.Snapshot.Index != 6 || string(saved.Snapshot.Head) != "6" || len(saved.Log) != 2 {
+		t.Fatalf("loaded %+v, %v; want the snapshot of 6, 2 entries after", saved, err)
+	}
+	save(t, g, g.SaveSnapshot(4, at(4), true, "older"))
+	if saved, err := g.Load(); err != nil || saved.Snapshot.Index != 6 {
+		t.Errorf("an older snapshot saved over the later: %+v, %v", saved.Snapshot, err)
 	}
 }

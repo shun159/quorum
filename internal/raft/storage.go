@@ -26,8 +26,11 @@ type Storage interface {
 	// SaveSnapshot returns the effect saving the snapshot of the entries
 	// up to index, as encode encodes it, in place of those entries; those
 	// after it stay. What encode encodes never changes: it may be called
-	// in a goroutine of the storage's.
-	SaveSnapshot(index uint64, encode func() (Encoded, error), tag any) actor.Effect
+	// in a goroutine of the storage's. In the background, the write is
+	// made apart from the others: whether it is durable says nothing of
+	// them, nor theirs of it; and a snapshot older than the one saved is
+	// not saved, but said durable.
+	SaveSnapshot(index uint64, encode func() (Encoded, error), background bool, tag any) actor.Effect
 	// Durable reports whether msg tells that the write of tag is durable,
 	// or that it failed, with err.
 	Durable(msg any) (tag any, err error, ok bool)
@@ -113,7 +116,24 @@ func (b behaviour[S, Cmd, Rep]) saveLog(d *replica[S], index uint64) []actor.Eff
 func (b behaviour[S, Cmd, Rep]) saveSnapshot(d *replica[S]) []actor.Effect {
 	snap := d.snapshot
 	encode := func() (Encoded, error) { return b.encode(snap) }
-	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.SaveSnapshot(snap.Index, encode, tag) })
+	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.SaveSnapshot(snap.Index, encode, false, tag) })
+}
+
+// compacted tags the save of a snapshot taken to compact the log.
+type compacted struct{}
+
+// compact saves the snapshot the member took to compact its log, in the
+// background: its storage keeps the entries the snapshot replaces until
+// it is saved, and nothing the member tells rests on it. One at a time:
+// one taken meanwhile is not saved, a later one is.
+func (b behaviour[S, Cmd, Rep]) compact(d *replica[S]) []actor.Effect {
+	if b.spec.Storage == nil || d.compacting {
+		return nil
+	}
+	d.compacting = true
+	snap := d.snapshot
+	encode := func() (Encoded, error) { return b.encode(snap) }
+	return actor.Do(b.spec.Storage.SaveSnapshot(snap.Index, encode, true, compacted{}))
 }
 
 // write returns the effect of a write, tagged as the next. Without a
@@ -151,6 +171,10 @@ func (b behaviour[S, Cmd, Rep]) isDurable(msg any) (tag any, err error, ok bool)
 func (b behaviour[S, Cmd, Rep]) durable(r role, d replica[S], tag any, err error) (role, replica[S], []actor.Effect) {
 	if err != nil {
 		return r, d, actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot save: %w", b.spec.Group, err)})
+	}
+	if tag == (compacted{}) {
+		d.compacting = false
+		return r, d, nil
 	}
 	t, ok := tag.(writeTag)
 	if !ok || t.Seq <= d.saved {
