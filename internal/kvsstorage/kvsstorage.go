@@ -118,6 +118,7 @@ func (s storage) Load() (raft.Saved, error) {
 		case k.Kind == KindState:
 			saved.State = r.State
 		case k.Kind == KindSnapshot:
+			removeTemps(s.snapshotDir(t))
 			enc, err := readSnapshot(s.snapshotDir(t), r.Snapshot)
 			if err != nil {
 				return raft.Saved{}, fmt.Errorf("kvsstorage: group %s cannot read its snapshot: %w", s.group, err)
@@ -165,25 +166,9 @@ func (s storage) Append(index uint64, entries []raft.Entry, tag any) actor.Effec
 
 // SaveSnapshot returns the effect writing the file of the snapshot encode
 // encodes, then putting its record, and deleting the entries up to index,
-// which Load skips meanwhile.
-func (s storage) SaveSnapshot(index uint64, encode func() (raft.Encoded, error), tag any) actor.Effect {
-	return writesEffect{s: s, tag: tag, writes: func(t *Table) ([]write, error) {
-		enc, err := encode()
-		if err != nil {
-			return nil, err
-		}
-		if err := writeSnapshot(s.snapshotDir(t), index, enc); err != nil {
-			return nil, err
-		}
-		writes := []write{put(s.key(KindSnapshot, 0), Record{Snapshot: index})}
-		for _, k := range s.keys(t, 1) {
-			if k.Index > index {
-				break
-			}
-			writes = append(writes, del(k))
-		}
-		return writes, nil
-	}}
+// which Load skips meanwhile: in a goroutine of its own if background.
+func (s storage) SaveSnapshot(index uint64, encode func() (raft.Encoded, error), background bool, tag any) actor.Effect {
+	return snapshotEffect{s: s, index: index, encode: encode, background: background, tag: tag}
 }
 
 // keys returns the keys of the entries saved in t from index on, in order.

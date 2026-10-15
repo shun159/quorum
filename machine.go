@@ -55,7 +55,9 @@ type TimedReader[S, Cmd, Rep any] interface {
 // node the time to collect it.
 type Encoder[S any] interface {
 	// EncodeState returns s encoded. What it returns may be the memory of
-	// s, as a state is never changed in place.
+	// s, as a state is never changed in place. It is called in another
+	// goroutine than Apply, as the member saves a snapshot in the
+	// background.
 	EncodeState(s S) ([]byte, error)
 	// DecodeState returns the state b encodes, and may keep b.
 	DecodeState(b []byte) (S, error)
