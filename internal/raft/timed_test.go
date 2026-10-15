@@ -23,7 +23,8 @@ func (clocked) ReadAt(_ int, _ int, at time.Time) int { return int(at.UnixNano()
 
 // A Timed machine applies each command at the time the leader took it,
 // the same on every member, going forward; it reads at the leader's time,
-// not before the last command's.
+// not before the last command's, one entry bringing the log to it for
+// the reads of a while.
 func TestTimed(t *testing.T) {
 	g := newGroupOf(t, 1, three, func(string) Machine[int, int, int] { return clocked{} })
 	first, err := g.command(0)
@@ -51,5 +52,50 @@ func TestTimed(t *testing.T) {
 	}
 	if at := v.(applied).Rep.(int); at < second+int(time.Minute) || int64(at) > g.s.Now().UnixNano() {
 		t.Errorf("read at %v, the last command at %v, now %v", time.Unix(0, int64(at)), time.Unix(0, int64(second)), g.s.Now())
+	}
+	_, d, _ := g.member(g.leader())
+	for range 3 {
+		if _, err := g.ask(read{0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, after, _ := g.member(g.leader()); after.log.lastIndex() != d.log.lastIndex() {
+		t.Errorf("3 reads at once appended %d entries", after.log.lastIndex()-d.log.lastIndex())
+	}
+}
+
+// The clocks of the members are off from each other: commands are applied
+// at times going forward all the same, and a command after a read, at a
+// time no earlier than the read's.
+func TestTimedSkewed(t *testing.T) {
+	g := newGroupOf(t, 1, three, func(string) Machine[int, int, int] { return clocked{} })
+	g.s.Skew("b", -10*time.Second)
+	g.s.Skew("c", 10*time.Second)
+	g.run(time.Second)
+	lead := func(to string) {
+		t.Helper()
+		if g.leader() != to {
+			if v, err := g.ask(transferLeader{To: to}); err != nil || v != (applied{}) {
+				t.Fatalf("transfer to %s: %#v, %v", to, v, err)
+			}
+		}
+		g.run(time.Second)
+	}
+	var last int
+	for _, to := range []string{"c", "b", "a", "c", "b"} {
+		lead(to)
+		at, err := g.command(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at < last {
+			t.Errorf("%s applied a command at %v, before %v", to, time.Unix(0, int64(at)), time.Unix(0, int64(last)))
+		}
+		g.s.Advance(time.Second)
+		v, err := g.ask(read{0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = max(at, v.(applied).Rep.(int))
 	}
 }

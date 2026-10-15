@@ -48,15 +48,11 @@ func (b behaviour[S, Cmd, Rep]) applyMachine(s S, cmd Cmd, at int64) (S, Rep, []
 	return b.spec.Machine.Apply(s, cmd)
 }
 
-// readMachine answers cmd in s, at the time of the leader, if the
-// machine is a TimedReader: its clock, but not before the time of the log.
+// readMachine answers cmd in s, at the time of the log, if the machine is
+// a TimedReader: see timeForRead.
 func (b behaviour[S, Cmd, Rep]) readMachine(d *replica[S], cmd Cmd) Rep {
 	if m, ok := b.spec.Machine.(TimedReader[S, Cmd, Rep]); ok {
-		at := d.sessions.Time
-		if b.now != nil {
-			at = max(at, b.now().UnixNano())
-		}
-		return m.ReadAt(d.state, cmd, time.Unix(0, at))
+		return m.ReadAt(d.state, cmd, time.Unix(0, d.sessions.Time))
 	}
 	return b.spec.Machine.(Reader[S, Cmd, Rep]).Read(d.state, cmd)
 }

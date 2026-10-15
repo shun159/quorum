@@ -39,8 +39,11 @@ type Timed[S, Cmd, Rep any] interface {
 }
 
 // TimedReader is implemented by a Machine whose reads depend on time:
-// ReadAt is called in place of Read, at the time of the leader's clock,
-// never before the time of the last command applied.
+// ReadAt is called in place of Read, at the time of the group, that of
+// the last command applied, which the leader first brings to its clock,
+// by an entry, if behind it by more than Spec.Heartbeat. A command after
+// a read is so applied at a time no earlier, though the clock of the next
+// leader be behind.
 type TimedReader[S, Cmd, Rep any] interface {
 	ReadAt(s S, cmd Cmd, at time.Time) Rep
 }
