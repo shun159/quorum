@@ -9,7 +9,7 @@ func init() {
 	dist.Register(preVote{}, preVoteReply{}, requestVote{}, voteReply{}, appendEntries{}, appendReply{},
 		whoLeads{}, command{}, read{}, applied{}, expired{}, openSession{}, Origin{}, redirect{}, deposed{}, rejected{},
 		identify{}, identity{}, found{}, Config{}, addMember{}, removeMember{}, busy{},
-		installSnapshot{}, snapshotAck{}, transferLeader{}, timeoutNow{}, stateBytes(nil))
+		installSnapshot{}, snapshotAck{}, transferLeader{}, timeoutNow{})
 }
 
 // The messages between the members of a group, the RPCs of Raft, sent as

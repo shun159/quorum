@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/shun159/molecule/actor"
@@ -26,6 +27,8 @@ func (b behaviour[S, Cmd, Rep]) takeSnapshot(d *replica[S]) []actor.Effect {
 	return b.saveSnapshot(d)
 }
 
+var errHead = errors.New("the head of a snapshot past its end")
+
 // installSnapshot takes a chunk of the leader's snapshot, for a member
 // missing entries the leader has no more, and tells how much it has; with
 // the last, it installs the snapshot.
@@ -44,7 +47,11 @@ func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d replica[S], m installS
 		ack := snapshotAck{Term: d.term, From: d.id, Index: m.Index, Offset: has}
 		return r, d, append(effs, b.send(m.Leader, ack))
 	}
-	snap, err := b.decodeSnapshot(d.incoming.data, m.Head)
+	var snap Snapshot
+	err := errHead
+	if data := d.incoming.data; m.Head <= len(data) {
+		snap, err = b.decode(Encoded{Head: data[:m.Head], State: data[m.Head:]})
+	}
 	d.incoming = receiving{}
 	if err != nil {
 		return r, d, actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot decode a snapshot: %w", b.spec.Group, err)})

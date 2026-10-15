@@ -1,9 +1,6 @@
 package raft
 
 import (
-	"bytes"
-	"encoding/gob"
-	"reflect"
 	"testing"
 
 	"github.com/shun159/molecule/actor"
@@ -64,7 +61,7 @@ func TestInstallSnapshot(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := installSnapshot{Term: 2, Leader: ida, To: idb, Index: 3, Size: data.len(), Head: len(data.head), Data: data.slice(0, data.len())}
+		m := installSnapshot{Term: 2, Leader: ida, To: idb, Index: 3, Size: data.len(), Head: len(data.Head), Data: data.slice(0, data.len())}
 		_, d, _ = b.HandleEvent(follower, d, genstatem.Info{Msg: m})
 		if d.log.start != 3 || d.log.lastIndex() != c.wantEnd || d.state != 7 || d.applied != 3 {
 			t.Errorf("%s: log from %d to %d, state %d applied to %d; want to %d, 7 applied to 3",
@@ -165,7 +162,7 @@ func TestSnapshotInChunks(t *testing.T) {
 // A snapshot encoded is sent in slices of its head and state as if they
 // were one.
 func TestEncodedSlice(t *testing.T) {
-	e := encoded{head: []byte("abc"), state: []byte("defg")}
+	e := Encoded{Head: []byte("abc"), State: []byte("defg")}
 	whole := "abcdefg"
 	for from := range len(whole) {
 		for to := from; to <= len(whole); to++ {
@@ -174,8 +171,8 @@ func TestEncodedSlice(t *testing.T) {
 			}
 		}
 	}
-	if string(e.head) != "abc" {
-		t.Errorf("slicing changed the head: %q", e.head)
+	if string(e.Head) != "abc" {
+		t.Errorf("slicing changed the head: %q", e.Head)
 	}
 }
 
@@ -207,31 +204,29 @@ func TestReceiveChunks(t *testing.T) {
 }
 
 // The snapshot of an Encoder machine is saved as the machine encodes its
-// state, through gob as the storage of a node does, and comes back
-// decoded as the member starts again.
+// state, apart from the rest, and comes back decoded as the member starts
+// again.
 func TestSnapshotSavedEncoded(t *testing.T) {
 	b, d := member(t)
 	b.spec.Machine, b.spec.SnapshotEvery = encodingCounter{}, 1
 	d.state, d.applied = 7, 1
-	var saved *Snapshot
+	var w *memWrite
 	for _, e := range b.takeSnapshot(&d) {
-		if e, ok := e.(memEffect); ok && e.w.snapshot != nil {
-			saved = e.w.snapshot
+		if e, ok := e.(memEffect); ok && e.w.encode != nil {
+			w = &e.w
 		}
 	}
-	if saved == nil || !reflect.DeepEqual(saved.State, stateBytes("7")) {
-		t.Fatalf("saved %+v, want the state as the bytes of 7", saved)
+	if w == nil {
+		t.Fatal("no snapshot saved")
 	}
-	var buf bytes.Buffer
-	if err := gob.NewEncoder(&buf).Encode(saved); err != nil {
-		t.Fatal(err)
+	enc, err := w.encode()
+	if err != nil || string(enc.State) != "7" {
+		t.Fatalf("saved the state as %q, %v; want 7", enc.State, err)
 	}
 	m := b.spec.Storage.(*memStorage)
-	if err := gob.NewDecoder(&buf).Decode(&m.saved.Snapshot); err != nil {
-		t.Fatal(err)
-	}
-	_, d, _, err := b.Init(idb)
-	if err != nil || d.state != 7 || d.snapshot.State != 7 {
-		t.Errorf("started again: state %d, snapshot of %#v, %v; want 7", d.state, d.snapshot.State, err)
+	m.saved.Snapshot = SavedSnapshot{Index: w.snapshot.Index, Encoded: enc}
+	_, d, _, err = b.Init(idb)
+	if err != nil || d.state != 7 || d.snapshot.State != 7 || d.applied != 1 {
+		t.Errorf("started again: state %d, snapshot of %#v, applied %d, %v; want 7 to 1", d.state, d.snapshot.State, d.applied, err)
 	}
 }

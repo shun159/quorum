@@ -41,60 +41,58 @@ func (b behaviour[S, Cmd, Rep]) sendSnapshot(d *replica[S], p peer) []actor.Effe
 	return actor.Do(b.chunkTo(d, p.id))
 }
 
-// encoded is a snapshot encoded: its head, of gob, then the state of the
-// machine, if the machine is an Encoder; else the head holds it too. The
-// two are sent one after the other, never copied together.
-type encoded struct{ head, state []byte }
+func (e Encoded) len() int { return len(e.Head) + len(e.State) }
 
-func (e encoded) len() int { return len(e.head) + len(e.state) }
-
-// slice returns the bytes of the snapshot encoded from from to to.
-func (e encoded) slice(from, to int) []byte {
-	h := len(e.head)
+// slice returns the bytes of the snapshot encoded from from to to: Head
+// and State one after the other, never copied together but for the chunk
+// across them.
+func (e Encoded) slice(from, to int) []byte {
+	h := len(e.Head)
 	switch {
 	case to <= h:
-		return e.head[from:to]
+		return e.Head[from:to]
 	case from >= h:
-		return e.state[from-h : to-h]
+		return e.State[from-h : to-h]
 	}
-	return append(e.head[from:h:h], e.state[:to-h]...)
+	return append(e.Head[from:h:h], e.State[:to-h]...)
 }
 
 // encodedSnapshot returns the snapshot of the leader encoded, as it sends
 // it to another member already, if it does.
-func (b behaviour[S, Cmd, Rep]) encodedSnapshot(d *replica[S]) (encoded, error) {
+func (b behaviour[S, Cmd, Rep]) encodedSnapshot(d *replica[S]) (Encoded, error) {
 	for _, p := range d.peers {
 		if p.sending == d.snapshot.Index {
 			return p.data, nil
 		}
 	}
-	var e encoded
-	snap := d.snapshot
+	return b.encode(d.snapshot)
+}
+
+// encode encodes snap: its state as the machine encodes it, if it is an
+// Encoder, apart from the rest, which gob encodes.
+func (b behaviour[S, Cmd, Rep]) encode(snap Snapshot) (Encoded, error) {
+	var e Encoded
 	if m, ok := b.spec.Machine.(Encoder[S]); ok {
 		state, err := m.EncodeState(snap.State.(S))
 		if err != nil {
 			return e, err
 		}
-		e.state, snap.State = state, nil
+		e.State, snap.State = state, nil
 	}
 	var buf bytes.Buffer
 	err := gob.NewEncoder(&buf).Encode(snap)
-	e.head = buf.Bytes()
+	e.Head = buf.Bytes()
 	return e, err
 }
 
-// decodeSnapshot returns the snapshot data encodes, of which the first
-// head bytes are of gob.
-func (b behaviour[S, Cmd, Rep]) decodeSnapshot(data []byte, head int) (Snapshot, error) {
+// decode returns the snapshot e encodes.
+func (b behaviour[S, Cmd, Rep]) decode(e Encoded) (Snapshot, error) {
 	var snap Snapshot
-	if head > len(data) {
-		return snap, fmt.Errorf("a head of %d bytes in %d", head, len(data))
-	}
-	if err := gob.NewDecoder(bytes.NewReader(data[:head])).Decode(&snap); err != nil {
+	if err := gob.NewDecoder(bytes.NewReader(e.Head)).Decode(&snap); err != nil {
 		return snap, err
 	}
 	if m, ok := b.spec.Machine.(Encoder[S]); ok {
-		s, err := m.DecodeState(data[head:])
+		s, err := m.DecodeState(e.State)
 		snap.State = s
 		return snap, err
 	}
@@ -114,7 +112,7 @@ func (b behaviour[S, Cmd, Rep]) chunkTo(d *replica[S], id proc.PID) actor.Effect
 		Index:  p.sending,
 		Offset: p.offset,
 		Size:   p.data.len(),
-		Head:   len(p.data.head),
+		Head:   len(p.data.Head),
 		Data:   p.data.slice(p.offset, end),
 	})
 }
@@ -161,6 +159,6 @@ func (d *replica[S]) receive(m installSnapshot) int {
 // tells p holds the log as far. A reply sent before it arrived does not.
 func (p *peer) snapshotArrived(m appendReply) {
 	if p.sending != 0 && max(m.Match, m.LastIndex) >= p.sending {
-		p.sending, p.data, p.offset = 0, encoded{}, 0
+		p.sending, p.data, p.offset = 0, Encoded{}, 0
 	}
 }

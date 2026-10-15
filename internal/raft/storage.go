@@ -23,9 +23,11 @@ type Storage interface {
 	// Append returns the effect writing entries from index on, in place
 	// of the entries saved from index on.
 	Append(index uint64, entries []Entry, tag any) actor.Effect
-	// SaveSnapshot returns the effect saving snap, in place of the
-	// entries up to its index; those after it stay.
-	SaveSnapshot(snap Snapshot, tag any) actor.Effect
+	// SaveSnapshot returns the effect saving the snapshot of the entries
+	// up to index, as encode encodes it, in place of those entries; those
+	// after it stay. What encode encodes never changes: it may be called
+	// in a goroutine of the storage's.
+	SaveSnapshot(index uint64, encode func() (Encoded, error), tag any) actor.Effect
 	// Durable reports whether msg tells that the write of tag is durable,
 	// or that it failed, with err.
 	Durable(msg any) (tag any, err error, ok bool)
@@ -51,11 +53,24 @@ type Snapshot struct {
 	Sessions Sessions
 }
 
+// Encoded is a snapshot encoded, as a member sends it to another and its
+// storage keeps it: Head, by gob, then State, the state of the machine as
+// it encodes it, if it is an Encoder; else State is empty, and Head holds
+// the state too.
+type Encoded struct{ Head, State []byte }
+
+// SavedSnapshot is a snapshot as a storage keeps it: the index of the last
+// entry it replaces, and the snapshot encoded.
+type SavedSnapshot struct {
+	Index uint64
+	Encoded
+}
+
 // Saved is what a member saved: its state, its snapshot, if Index is not
 // 0, and its log after the snapshot.
 type Saved struct {
 	State    State
-	Snapshot Snapshot
+	Snapshot SavedSnapshot
 	Log      []Entry
 }
 
@@ -96,46 +111,9 @@ func (b behaviour[S, Cmd, Rep]) saveLog(d *replica[S], index uint64) []actor.Eff
 // saveSnapshot saves the snapshot of the member, in place of the entries
 // it holds.
 func (b behaviour[S, Cmd, Rep]) saveSnapshot(d *replica[S]) []actor.Effect {
-	if b.spec.Storage == nil {
-		return b.write(d, nil)
-	}
-	snap, err := b.stored(d.snapshot)
-	if err != nil {
-		return actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot encode its snapshot: %w", b.spec.Group, err)})
-	}
-	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.SaveSnapshot(snap, tag) })
-}
-
-// stateBytes is the state of a snapshot as an Encoder machine encodes it,
-// as the storage keeps it: gob, which would walk the state, only copies
-// its bytes.
-type stateBytes []byte
-
-// stored returns snap as the storage keeps it: its state encoded by the
-// machine, if it is an Encoder.
-func (b behaviour[S, Cmd, Rep]) stored(snap Snapshot) (Snapshot, error) {
-	m, ok := b.spec.Machine.(Encoder[S])
-	if !ok {
-		return snap, nil
-	}
-	data, err := m.EncodeState(snap.State.(S))
-	snap.State = stateBytes(data)
-	return snap, err
-}
-
-// loaded returns snap as the storage kept it, its state decoded.
-func (b behaviour[S, Cmd, Rep]) loaded(snap Snapshot) (Snapshot, error) {
-	data, ok := snap.State.(stateBytes)
-	if !ok {
-		return snap, nil
-	}
-	m, ok := b.spec.Machine.(Encoder[S])
-	if !ok {
-		return snap, fmt.Errorf("a state encoded, by a machine that does not decode it")
-	}
-	s, err := m.DecodeState(data)
-	snap.State = s
-	return snap, err
+	snap := d.snapshot
+	encode := func() (Encoded, error) { return b.encode(snap) }
+	return b.write(d, func(tag writeTag) actor.Effect { return b.spec.Storage.SaveSnapshot(snap.Index, encode, tag) })
 }
 
 // write returns the effect of a write, tagged as the next. Without a

@@ -121,7 +121,7 @@ func TestNonVoter(t *testing.T) {
 		t.Errorf("a learner asked would: %v", msgs)
 	}
 	_, d2, effs := b.HandleEvent(follower, d, genstatem.Info{Msg: requestVote{Term: 1, Candidate: ida, LastIndex: 1}})
-	_, _, effs = b.HandleEvent(follower, d2, genstatem.Info{Msg: memDurable{written(t, effs)}})
+	_, _, effs = b.HandleEvent(follower, d2, genstatem.Info{Msg: memDurable{tag: written(t, effs)}})
 	if msgs := sent(effs); len(msgs) != 1 || msgs[0] != (voteReply{Term: 1, From: idb, Granted: true}) {
 		t.Errorf("a learner told %v", msgs)
 	}
@@ -227,7 +227,7 @@ func TestStandAsksLearners(t *testing.T) {
 	config := Config{Voters: []proc.PID{ida, idb}, Learners: []proc.PID{idc}}
 	d.log, d.config = logOf(Entry{Config: &config}), config
 	r, d, effs := b.stand(d)
-	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{written(t, effs)}})
+	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{tag: written(t, effs)}})
 	asked := map[string]bool{}
 	for _, e := range effs {
 		if s, ok := e.(actor.Send); ok {

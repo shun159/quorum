@@ -23,7 +23,8 @@ type memStorage struct {
 type memWrite struct {
 	tag      any
 	state    *State
-	snapshot *Snapshot
+	snapshot *SavedSnapshot
+	encode   func() (Encoded, error) // the snapshot, as performed
 	index    uint64
 	entries  []Entry
 }
@@ -31,8 +32,12 @@ type memWrite struct {
 // fsyncTime is how long a write of a memStorage takes to be durable.
 const fsyncTime = 5 * time.Millisecond
 
-// memDurable is the message telling the member a write is durable.
-type memDurable struct{ tag any }
+// memDurable is the message telling the member a write is durable, or
+// failed.
+type memDurable struct {
+	tag any
+	err error
+}
 
 // memEffect is the effect of a write, performed by the member's runtime.
 type memEffect struct {
@@ -42,16 +47,24 @@ type memEffect struct {
 }
 
 func (e memEffect) Perform(env gen.Env) {
+	if e.w.encode != nil {
+		enc, err := e.w.encode()
+		if err != nil {
+			env.Send(env.Self(), memDurable{e.w.tag, err})
+			return
+		}
+		e.w.snapshot.Encoded = enc
+	}
 	e.m.writes = append(e.m.writes, e.w)
-	env.SendAfter(fsyncTime, memDurable{e.w.tag})
+	env.SendAfter(fsyncTime, memDurable{tag: e.w.tag})
 }
 
 func (m *memStorage) Load() (Saved, error) {
 	return Saved{State: m.saved.State, Snapshot: m.saved.Snapshot, Log: slices.Clone(m.saved.Log)}, nil
 }
 
-func (m *memStorage) SaveSnapshot(snap Snapshot, tag any) actor.Effect {
-	return memEffect{m: m, w: memWrite{tag: tag, snapshot: &snap}}
+func (m *memStorage) SaveSnapshot(index uint64, encode func() (Encoded, error), tag any) actor.Effect {
+	return memEffect{m: m, w: memWrite{tag: tag, snapshot: &SavedSnapshot{Index: index}, encode: encode}}
 }
 
 func (m *memStorage) SaveState(st State, tag any) actor.Effect {
@@ -66,6 +79,9 @@ func (m *memStorage) Durable(msg any) (any, error, bool) {
 	d, ok := msg.(memDurable)
 	if !ok {
 		return nil, nil, false
+	}
+	if d.err != nil {
+		return d.tag, d.err, true
 	}
 	i := slices.IndexFunc(m.writes, func(w memWrite) bool { return w.tag == d.tag })
 	m.keep(i + 1)
@@ -95,7 +111,7 @@ func (m *memStorage) keep(n int) {
 }
 
 // saveSnapshot puts snap in place of the entries up to its index.
-func (m *memStorage) saveSnapshot(snap Snapshot) {
+func (m *memStorage) saveSnapshot(snap SavedSnapshot) {
 	gone := min(snap.Index-m.saved.Snapshot.Index, uint64(len(m.saved.Log)))
 	m.saved.Log = slices.Clone(m.saved.Log[gone:])
 	m.saved.Snapshot = snap

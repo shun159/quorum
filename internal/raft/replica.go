@@ -81,7 +81,7 @@ type peer struct {
 	heardIn uint64  // the round of the check the leader last heard from it in
 	read    uint64  // the last round of confirming reads it answered
 	sending uint64  // the index of the snapshot it is sent, if not 0
-	data    encoded // that snapshot
+	data    Encoded // that snapshot
 	offset  int     // how much of it the member has
 	chunkIn uint64  // the round of the check the leader last sent it a chunk in
 }
@@ -139,11 +139,11 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		votedFor: saved.State.VotedFor,
 		log:      logOf(saved.Log...),
 	}
-	snap, err := b.loaded(saved.Snapshot)
-	if err != nil {
-		return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s cannot decode its snapshot: %w", b.spec.Group, err)
-	}
-	if snap.Index > 0 {
+	if saved.Snapshot.Index > 0 {
+		snap, err := b.decode(saved.Snapshot.Encoded)
+		if err != nil {
+			return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s cannot decode its snapshot: %w", b.spec.Group, err)
+		}
 		state, ok := snap.State.(S)
 		if !ok {
 			return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s saved a snapshot of a %T", b.spec.Group, snap.State)
