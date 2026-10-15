@@ -106,7 +106,7 @@ func TestTransferBusy(t *testing.T) {
 func TestHandOver(t *testing.T) {
 	b, d := leading(t)
 	d.log = d.log.add(Entry{Term: 1})
-	d.logChanged()
+	d.logChanged(0)
 	_, d, effs := b.HandleEvent(leader, d, genstatem.Call{From: reader, Req: transferLeader{To: ida.Node()}})
 	if msgs := sent(effs); len(msgs) != 1 || !isAppend(msgs[0]) {
 		t.Fatalf("a behind: %v", effs)

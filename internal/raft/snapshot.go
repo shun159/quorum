@@ -66,7 +66,7 @@ func (b behaviour[S, Cmd, Rep]) install(d *replica[S], snap Snapshot) []actor.Ef
 	keep := d.log.has(snap.Index, snap.Term)
 	d.snapshot, d.state, d.sessions = snap, snap.State.(S), snap.Sessions
 	d.log = d.log.compact(snap, keep)
-	d.logChanged()
+	d.logChanged(0)
 	d.commit, d.applied = snap.Index, snap.Index
 	effs := b.saveSnapshot(d)
 	if !keep {

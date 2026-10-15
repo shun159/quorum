@@ -121,7 +121,7 @@ func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntr
 	log, changed := d.log.merge(m.PrevIndex, m.Entries)
 	if changed > 0 {
 		d.log = log
-		d.logChanged()
+		d.logChanged(changed)
 		effs = append(effs, b.saveLog(&d, changed)...)
 	}
 	match := m.PrevIndex + uint64(len(m.Entries))
