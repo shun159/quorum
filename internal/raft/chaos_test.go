@@ -135,7 +135,12 @@ func chaos(t *testing.T, seed uint64, opts ...gensim.Option) outcomes {
 	// Three are the most fragile: one member losing a write may lose what
 	// was committed. Five see two members cut off at once.
 	members := []string{"a", "b", "c", "d", "e"}[:[]int{3, 5}[seed%2]]
-	g := newGroup(t, seed, members, opts...)
+	// Half encode their state themselves, which a snapshot sends apart.
+	machine := func(string) Machine[int, int, int] { return counter{} }
+	if seed/2%2 == 1 {
+		machine = func(string) Machine[int, int, int] { return encodingCounter{} }
+	}
+	g := newGroupOf(t, seed, members, machine, opts...)
 	g.s.Loss = 0.05
 	cl := spawn(g, genserver.Gen(client{group: g.name, members: members}), "client")
 	g.op = spawn(g, genserver.Gen(operator{group: g.name, members: members}), "operator")

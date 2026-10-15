@@ -40,24 +40,28 @@ func TestSnapshotConfig(t *testing.T) {
 }
 
 // A snapshot installed replaces the log up to it; the entries after it
-// stay if the log goes on with the leader's there, and go if not.
+// stay if the log goes on with the leader's there, and go if not. Its
+// state is encoded by gob, or by the machine.
 func TestInstallSnapshot(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		term    uint64 // of the snapshot's last entry
 		wantEnd uint64 // the last index of the log after
+		machine Machine[int, int, int]
 	}{
-		{"matching", 1, 4},
-		{"diverging", 2, 3},
+		{"matching", 1, 4, counter{}},
+		{"diverging", 2, 3, counter{}},
+		{"encoded by the machine", 1, 4, encodingCounter{}},
 	} {
 		b, d := member(t)
+		b.spec.Machine = c.machine
 		d = withCommands(d, 4)
 		snap := Snapshot{Index: 3, Term: c.term, Config: d.config, State: 7}
-		data, err := (&replica[int]{snapshot: snap}).encodedSnapshot()
+		data, err := b.encodedSnapshot(&replica[int]{snapshot: snap})
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := installSnapshot{Term: 2, Leader: ida, To: idb, Index: 3, Size: len(data), Data: data}
+		m := installSnapshot{Term: 2, Leader: ida, To: idb, Index: 3, Size: data.len(), Head: len(data.head), Data: data.slice(0, data.len())}
 		_, d, _ = b.HandleEvent(follower, d, genstatem.Info{Msg: m})
 		if d.log.start != 3 || d.log.lastIndex() != c.wantEnd || d.state != 7 || d.applied != 3 {
 			t.Errorf("%s: log from %d to %d, state %d applied to %d; want to %d, 7 applied to 3",
@@ -142,16 +146,33 @@ func TestSnapshotInChunks(t *testing.T) {
 			break
 		}
 	}
-	data, _ := ld.encodedSnapshot()
-	if want := (len(data) + 15) / 16; chunks != want || want < 2 {
-		t.Errorf("%d chunks, want %d of the %d bytes", chunks, want, len(data))
+	data, _ := bl.encodedSnapshot(&ld)
+	if want := (data.len() + 15) / 16; chunks != want || want < 2 {
+		t.Errorf("%d chunks, want %d of the %d bytes", chunks, want, data.len())
 	}
 	if fd.state != 3 || fd.applied != 2 || len(fd.sessions.Open) != 1 || fd.incoming.data != nil {
 		t.Errorf("member: state %d applied to %d, %d sessions, %d bytes kept; want 3 to 2, 1, none",
 			fd.state, fd.applied, len(fd.sessions.Open), len(fd.incoming.data))
 	}
-	if p := ld.peer(idb); p.match != 2 || p.sending != 0 || p.data != nil {
-		t.Errorf("leader: match %d, sending %d, %d bytes kept; want 2, 0, none", p.match, p.sending, len(p.data))
+	if p := ld.peer(idb); p.match != 2 || p.sending != 0 || p.data.len() != 0 {
+		t.Errorf("leader: match %d, sending %d, %d bytes kept; want 2, 0, none", p.match, p.sending, p.data.len())
+	}
+}
+
+// A snapshot encoded is sent in slices of its head and state as if they
+// were one.
+func TestEncodedSlice(t *testing.T) {
+	e := encoded{head: []byte("abc"), state: []byte("defg")}
+	whole := "abcdefg"
+	for from := range len(whole) {
+		for to := from; to <= len(whole); to++ {
+			if got := string(e.slice(from, to)); got != whole[from:to] {
+				t.Errorf("slice(%d, %d) = %q, want %q", from, to, got, whole[from:to])
+			}
+		}
+	}
+	if string(e.head) != "abc" {
+		t.Errorf("slicing changed the head: %q", e.head)
 	}
 }
 

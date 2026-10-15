@@ -48,8 +48,9 @@
 //   - The state, the commands and the replies go between nodes and to
 //     disk: their types of their own are registered, with dist.Register,
 //     on every node, and only their exported fields are kept.
-//   - The state is held whole in memory, and sent whole to a member that
-//     needs it: a Machine of a moderate size, not a store of much data.
+//   - The state is held whole in memory, and sent whole, in chunks, to a
+//     member that needs it: a Machine of a moderate size, not a store of
+//     much data. Of more than a few MB, it is better an [Encoder].
 //   - A group applies its commands one at a time, through its leader: a
 //     load too much for one is spread over groups, as by a hash of a key,
 //     which agree on nothing together.
@@ -110,9 +111,4 @@
 // command, without anything written, once a majority has told it it still
 // leads. A read costs a round trip to a majority, not a write to their
 // disks.
-//
-// # What there is not yet
-//
-// The state of a machine is sent whole, in one message, to a member that
-// needs it, which suits machines of a moderate size.
 package quorum

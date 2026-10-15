@@ -56,8 +56,9 @@ type (
 	// installSnapshot gives the member To a chunk of the leader's
 	// snapshot of the entries up to Index, in place of the entries it
 	// misses, which the leader has no more: Data, from byte Offset of the
-	// Size of the snapshot encoded. A snapshotAck answers each but the
-	// last, an appendReply the last, once the snapshot is saved.
+	// Size of the snapshot encoded, whose first Head bytes are of gob. A
+	// snapshotAck answers each but the last, an appendReply the last, once
+	// the snapshot is saved.
 	installSnapshot struct {
 		Term   uint64
 		Leader proc.PID
@@ -65,6 +66,7 @@ type (
 		Index  uint64
 		Offset int
 		Size   int
+		Head   int
 		Data   []byte
 	}
 	// snapshotAck tells the leader that From has the snapshot of Index up

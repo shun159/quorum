@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -21,6 +22,15 @@ func (counter) Apply(sum, n int) (int, int, []actor.Effect) { return sum + n, su
 
 // Read returns the sum, whatever it is given.
 func (counter) Read(sum, _ int) int { return sum }
+
+// encodingCounter is a counter that encodes its state itself, in decimal.
+type encodingCounter struct{ counter }
+
+func (encodingCounter) EncodeState(sum int) ([]byte, error) {
+	return strconv.AppendInt(nil, int64(sum), 10), nil
+}
+
+func (encodingCounter) DecodeState(b []byte) (int, error) { return strconv.Atoi(string(b)) }
 
 // group is a group of counters simulated, and what the test has seen of
 // it, to check that Raft keeps its promises at every step.

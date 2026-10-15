@@ -72,12 +72,12 @@ type peer struct {
 	next  uint64 // the index of the next entry to send it
 	match uint64 // the last index known to match the leader's
 
-	heardIn uint64 // the round of the check the leader last heard from it in
-	read    uint64 // the last round of confirming reads it answered
-	sending uint64 // the index of the snapshot it is sent, if not 0
-	data    []byte // that snapshot, encoded
-	offset  int    // how much of it the member has
-	chunkIn uint64 // the round of the check the leader last sent it a chunk in
+	heardIn uint64  // the round of the check the leader last heard from it in
+	read    uint64  // the last round of confirming reads it answered
+	sending uint64  // the index of the snapshot it is sent, if not 0
+	data    encoded // that snapshot
+	offset  int     // how much of it the member has
+	chunkIn uint64  // the round of the check the leader last sent it a chunk in
 }
 
 // pending is a command the leader appended, to reply to once applied.

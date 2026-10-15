@@ -45,6 +45,19 @@ type TimedReader[S, Cmd, Rep any] interface {
 	ReadAt(s S, cmd Cmd, at time.Time) Rep
 }
 
+// Encoder is implemented by a Machine that encodes its state itself, for
+// the snapshot a leader sends a member missing it; gob encodes it
+// otherwise. gob holds a state of hundreds of MB in one message, which
+// costs the member several times its size, and the other groups of its
+// node the time to collect it.
+type Encoder[S any] interface {
+	// EncodeState returns s encoded. What it returns may be the memory of
+	// s, as a state is never changed in place.
+	EncodeState(s S) ([]byte, error)
+	// DecodeState returns the state b encodes, and may keep b.
+	DecodeState(b []byte) (S, error)
+}
+
 // Leader is implemented by a Machine that acts on becoming the leader of
 // its group, and on ceasing to be.
 type Leader[S any] interface {

@@ -309,6 +309,12 @@ func (blob) Apply(_ []byte, n int) ([]byte, int, []actor.Effect) {
 	return b, n, nil
 }
 
+// EncodeState and DecodeState send the state as it is, gob holding it
+// whole in one message, at several times its size.
+func (blob) EncodeState(b []byte) ([]byte, error) { return b, nil }
+
+func (blob) DecodeState(b []byte) ([]byte, error) { return b, nil }
+
 func (blob) Elected([]byte, uint64) []actor.Effect {
 	led.Store(big, true)
 	return nil
