@@ -39,14 +39,25 @@ func (w writer) HandleInfo(waiting *genserver.From[error], msg any) (*genserver.
 // save performs effs on st, in a simulation, and waits for them.
 func save(t *testing.T, st raft.Storage, effs ...actor.Effect) {
 	t.Helper()
+	if err := saving(t, st, effs...); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
+// saving is save, returning the error of the writes.
+func saving(t *testing.T, st raft.Storage, effs ...actor.Effect) error {
+	t.Helper()
 	s := gensim.New(1)
 	pid, err := gensim.Spawn(s, genserver.Gen(writer{st: st, effs: effs}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, err := s.Call(pid, perform{}); err != nil || v != nil {
-		t.Fatalf("write: %v, %v", v, err)
+	v, err := s.Call(pid, perform{})
+	if err != nil {
+		t.Fatal(err)
 	}
+	err, _ = v.(error)
+	return err
 }
 
 // voted is the member voted for, a PID.
@@ -133,6 +144,26 @@ func TestSnapshot(t *testing.T) {
 	// What is left of the log is that after the snapshot.
 	for k := range table.Range(Key{Group: "g", Kind: KindEntry}, Key{Group: "g", Kind: KindEntry, Index: 3}) {
 		t.Errorf("entry %d left", k.Index)
+	}
+}
+
+// A snapshot failing to encode is not saved, nor are the entries it was
+// to replace deleted: the member hears of the error.
+func TestSnapshotFailing(t *testing.T) {
+	table, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer table.Close()
+	g := For(table, "g")
+	save(t, g, g.Append(1, entries(1, 1, 1), 1))
+	bad := raft.Snapshot{Index: 2, Term: 1, State: func() {}}
+	if err := saving(t, g, g.SaveSnapshot(bad, 2)); err == nil {
+		t.Fatal("saved a snapshot of a func")
+	}
+	saved, err := g.Load()
+	if err != nil || saved.Snapshot.Index != 0 || !slices.Equal(saved.Log, entries(1, 1, 1)) {
+		t.Errorf("loaded snapshot %d, log %+v, %v; want none, the 3 entries", saved.Snapshot.Index, saved.Log, err)
 	}
 }
 

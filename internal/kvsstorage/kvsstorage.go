@@ -132,7 +132,7 @@ func (s storage) Load() (raft.Saved, error) {
 
 func (s storage) SaveState(st raft.State, tag any) actor.Effect {
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
-		return []write{put(t, s.key(KindState, 0), Record{State: st})}
+		return []write{put(s.key(KindState, 0), Record{State: st})}
 	}}
 }
 
@@ -150,10 +150,10 @@ func (s storage) Append(index uint64, entries []raft.Entry, tag any) actor.Effec
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
 		var writes []write
 		for _, k := range slices.Backward(s.keys(t, index)) {
-			writes = append(writes, del(t, k))
+			writes = append(writes, del(k))
 		}
 		for i, e := range entries {
-			writes = append(writes, put(t, s.key(KindEntry, index+uint64(i)), Record{Entry: e}))
+			writes = append(writes, put(s.key(KindEntry, index+uint64(i)), Record{Entry: e}))
 		}
 		return writes
 	}}
@@ -163,12 +163,12 @@ func (s storage) Append(index uint64, entries []raft.Entry, tag any) actor.Effec
 // up to its index, which Load skips meanwhile.
 func (s storage) SaveSnapshot(snap raft.Snapshot, tag any) actor.Effect {
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) []write {
-		writes := []write{put(t, s.key(KindSnapshot, 0), Record{Snapshot: snap})}
+		writes := []write{put(s.key(KindSnapshot, 0), Record{Snapshot: snap})}
 		for _, k := range s.keys(t, 1) {
 			if k.Index > snap.Index {
 				break
 			}
-			writes = append(writes, del(t, k))
+			writes = append(writes, del(k))
 		}
 		return writes
 	}}
@@ -183,21 +183,16 @@ func (s storage) keys(t *Table, index uint64) []Key {
 	return keys
 }
 
-// write is a write of the table, to make with its tag.
-type write func(tag any) actor.Effect
+// write is a write of the table.
+type write = kvs.Write[Key, Record]
 
-func put(t *Table, k Key, r Record) write {
-	return func(tag any) actor.Effect { return t.PutEffect(k, r, tag) }
-}
+func put(k Key, r Record) write { return write{Key: k, Val: r} }
 
-func del(t *Table, k Key) write {
-	return func(tag any) actor.Effect { return t.DeleteEffect(k, tag) }
-}
+func del(k Key) write { return write{Key: k, Delete: true} }
 
 // writesEffect performs the writes it makes, as it is performed: what
-// they are depends on what is saved then. Only its last write tells when
-// it is durable, which those before it are then. Without a table open,
-// it fails.
+// they are depends on what is saved then. They are made at once, all or
+// none, and one Durable tells of them. Without a table open, it fails.
 type writesEffect struct {
 	actor.Extension
 	s      storage
@@ -211,16 +206,5 @@ func (e writesEffect) Perform(env gen.Env) {
 		env.Send(env.Self(), kvs.Durable{Tag: e.tag, Err: err})
 		return
 	}
-	writes := e.writes(t)
-	if len(writes) == 0 {
-		env.Send(env.Self(), kvs.Durable{Tag: e.tag})
-		return
-	}
-	for i, w := range writes {
-		var tag any
-		if i == len(writes)-1 {
-			tag = e.tag
-		}
-		w(tag).(gen.Performer).Perform(env)
-	}
+	t.WritesEffect(e.tag, e.writes(t)...).(gen.Performer).Perform(env)
 }
