@@ -103,6 +103,9 @@ instead, each applied once however often it is sent again.
 [examples/locks](examples/locks) is a lock service on three nodes: its
 locks spread over eight groups, each led on any node, which agree on who
 holds each lock, with fencing tokens, while any one node is down.
+[examples/pubsub](examples/pubsub) keeps topics of messages on three
+nodes, and where each subscriber has read them to: a subscriber, stopped
+or its node lost, reads on from there, through any node.
 
 ## How far it goes
 

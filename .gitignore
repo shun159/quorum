@@ -22,3 +22,4 @@ go.work.sum
 
 # Data of the examples run from the root
 /locks-data/
+/pubsub-data/
