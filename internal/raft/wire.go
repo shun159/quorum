@@ -128,6 +128,15 @@ func (d *decoder) pid() proc.PID {
 	return p
 }
 
+func (d *decoder) string() string {
+	v := d.any()
+	s, ok := v.(string)
+	if !ok && d.err == nil {
+		d.fail(fmt.Errorf("quorum: a %T for a string", v))
+	}
+	return s
+}
+
 // pids reads PIDs, nil if none.
 func (d *decoder) pids() []proc.PID {
 	var ps []proc.PID
@@ -335,5 +344,74 @@ func (m *timeoutNow) DecodeBinary(b []byte) error {
 	m.Term = d.uint()
 	m.Leader = d.pid()
 	m.To = d.pid()
+	return d.done()
+}
+
+// The calls of clients, and their replies, as dist sends gen's calls:
+// the command and the reply by dist.AppendAny.
+
+func (m command) AppendBinary(b []byte) ([]byte, error) {
+	e := encoder{b: b}
+	e.any(m.Cmd)
+	e.uint(m.From.Session)
+	e.uint(m.From.Seq)
+	e.uint(m.From.Acked)
+	return e.done()
+}
+
+func (m *command) DecodeBinary(b []byte) error {
+	d := decoder{b: b}
+	m.Cmd = d.any()
+	m.From.Session = d.uint()
+	m.From.Seq = d.uint()
+	m.From.Acked = d.uint()
+	return d.done()
+}
+
+func (m read) AppendBinary(b []byte) ([]byte, error) {
+	e := encoder{b: b}
+	e.any(m.Cmd)
+	return e.done()
+}
+
+func (m *read) DecodeBinary(b []byte) error {
+	d := decoder{b: b}
+	m.Cmd = d.any()
+	return d.done()
+}
+
+func (m applied) AppendBinary(b []byte) ([]byte, error) {
+	e := encoder{b: b}
+	e.any(m.Rep)
+	return e.done()
+}
+
+func (m *applied) DecodeBinary(b []byte) error {
+	d := decoder{b: b}
+	m.Rep = d.any()
+	return d.done()
+}
+
+func (m redirect) AppendBinary(b []byte) ([]byte, error) {
+	e := encoder{b: b}
+	e.any(m.Leader)
+	return e.done()
+}
+
+func (m *redirect) DecodeBinary(b []byte) error {
+	d := decoder{b: b}
+	m.Leader = d.string()
+	return d.done()
+}
+
+func (m rejected) AppendBinary(b []byte) ([]byte, error) {
+	e := encoder{b: b}
+	e.any(m.Reason)
+	return e.done()
+}
+
+func (m *rejected) DecodeBinary(b []byte) error {
+	d := decoder{b: b}
+	m.Reason = d.string()
 	return d.done()
 }
