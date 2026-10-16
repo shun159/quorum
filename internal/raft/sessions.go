@@ -54,11 +54,17 @@ func (s Sessions) passed(t int64, timeout time.Duration) Sessions {
 		return s
 	}
 	s.Sweep = s.Time + int64(timeout/4)
+	var open map[uint64]Session // cloned once, on the first to forget
 	for id, ss := range s.Open {
 		if s.Time-ss.Last > int64(timeout) {
-			s.Open = maps.Clone(s.Open)
-			delete(s.Open, id)
+			if open == nil {
+				open = maps.Clone(s.Open)
+			}
+			delete(open, id)
 		}
+	}
+	if open != nil {
+		s.Open = open
 	}
 	return s
 }
