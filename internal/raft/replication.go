@@ -271,5 +271,8 @@ func (d *replica[S]) reply(index uint64, v any) []actor.Effect {
 	}
 	p := d.pending[0]
 	d.pending = d.pending[1:]
+	if len(d.pending) == 0 {
+		d.pending = nil // let the array go, with the clients of its slots
+	}
 	return actor.Do(actor.Reply{To: p.from, Value: v})
 }

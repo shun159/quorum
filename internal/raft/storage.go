@@ -186,6 +186,9 @@ func (b behaviour[S, Cmd, Rep]) durable(r role, d replica[S], tag any, err error
 		effs = append(effs, d.held[0].effs...)
 		d.held = d.held[1:]
 	}
+	if len(d.held) == 0 {
+		d.held = nil // let the array go, with what its slots told
+	}
 	if r == leader {
 		effs = append(effs, b.commit(r, &d)...)
 	}
