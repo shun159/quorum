@@ -119,21 +119,21 @@ func (b behaviour[S, Cmd, Rep]) chunkTo(d *replica[S], id proc.PID) actor.Effect
 
 // snapshotAck sends the member the chunk after what it has, once it has
 // more: or from the first, if it has none, having lost the others.
-func (b behaviour[S, Cmd, Rep]) snapshotAck(r role, d replica[S], m snapshotAck) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) snapshotAck(r role, d *replica[S], m snapshotAck) (role, []actor.Effect) {
 	if r != leader || m.Term != d.term {
-		return r, d, nil
+		return r, nil
 	}
 	p := d.peer(m.From)
 	if p == nil {
-		return r, d, nil
+		return r, nil
 	}
 	d.heard(p)
 	more := m.Offset > p.offset || m.Offset == 0 && p.offset > 0
 	if p.sending != m.Index || m.Offset >= p.data.len() || !more {
-		return r, d, nil
+		return r, nil
 	}
 	p.offset = m.Offset
-	return r, d, actor.Do(b.chunkTo(&d, p.id))
+	return r, actor.Do(b.chunkTo(d, p.id))
 }
 
 // receive adds the chunk m to the snapshot the member receives, if it

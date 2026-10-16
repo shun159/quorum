@@ -226,7 +226,7 @@ func TestStandAsksLearners(t *testing.T) {
 	b, d := member(t)
 	config := Config{Voters: []proc.PID{ida, idb}, Learners: []proc.PID{idc}}
 	d.log, d.config = logOf(Entry{Config: &config}), config
-	r, d, effs := b.stand(d)
+	r, effs := b.stand(&d)
 	_, _, effs = b.HandleEvent(r, d, genstatem.Info{Msg: memDurable{tag: written(t, effs)}})
 	asked := map[string]bool{}
 	for _, e := range effs {

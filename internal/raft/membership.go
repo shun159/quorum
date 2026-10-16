@@ -37,20 +37,20 @@ func Found(ctx context.Context, caller actor.Caller, group string, nodes []strin
 // refuses; one founded with config already says so again, whatever came
 // after: Found may reach it after the others elected a leader, which sent
 // it the founding.
-func (b behaviour[S, Cmd, Rep]) found(r role, d replica[S], c genstatem.Call, m found) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) found(r role, d *replica[S], c genstatem.Call, m found) (role, []actor.Effect) {
 	switch {
 	case d.foundedWith(m.Config):
-		return r, d, d.after(c.Reply(applied{}))
+		return r, d.after(c.Reply(applied{}))
 	case d.log.lastIndex() != 0:
-		return r, d, actor.Do(c.Reply(rejected{fmt.Sprintf("quorum: group %s is founded already", b.spec.Group)}))
+		return r, actor.Do(c.Reply(rejected{fmt.Sprintf("quorum: group %s is founded already", b.spec.Group)}))
 	case !m.Config.has(d.id):
-		return r, d, actor.Do(c.Reply(rejected{fmt.Sprintf("quorum: %v is not in the configuration of group %s", d.id, b.spec.Group)}))
+		return r, actor.Do(c.Reply(rejected{fmt.Sprintf("quorum: %v is not in the configuration of group %s", d.id, b.spec.Group)}))
 	}
 	config := Config{Voters: slices.Clone(m.Config.Voters), Learners: slices.Clone(m.Config.Learners)}
 	d.log = logOf(Entry{Term: 0, Config: &config})
 	d.logChanged(0)
-	effs := b.saveLog(&d, 1)
-	return r, d, append(effs, d.after(c.Reply(applied{}))...)
+	effs := b.saveLog(d, 1)
+	return r, append(effs, d.after(c.Reply(applied{}))...)
 }
 
 // foundedWith reports whether the group was founded with config: the
@@ -81,29 +81,29 @@ func RemoveMember(ctx context.Context, caller actor.Caller, group string, nodes 
 // change handles a change of the members. The leader appends the
 // configuration it makes, one change at a time. It replies to a removal
 // once committed, to an addition once the member is a voter.
-func (b behaviour[S, Cmd, Rep]) change(r role, d replica[S], c genstatem.Call, m any) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) change(r role, d *replica[S], c genstatem.Call, m any) (role, []actor.Effect) {
 	if r != leader {
-		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
+		return r, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	}
 	if !d.mayChange() {
-		return r, d, actor.Do(c.Reply(busy{}))
+		return r, actor.Do(c.Reply(busy{}))
 	}
 	config, err := b.changed(d.config, m)
 	add, adding := m.(addMember)
 	switch {
 	case err != nil:
-		return r, d, actor.Do(c.Reply(rejected{err.Error()}))
+		return r, actor.Do(c.Reply(rejected{err.Error()}))
 	case adding:
 		d.joining = append(d.joining, joining{id: add.ID, from: c.From})
 	case sameConfig(config, d.config):
-		return r, d, actor.Do(c.Reply(applied{}))
+		return r, actor.Do(c.Reply(applied{}))
 	default:
 		d.pending = append(d.pending, pending{index: d.log.lastIndex() + 1, from: c.From})
 	}
 	if sameConfig(config, d.config) {
-		return r, d, d.joined() // added already
+		return r, d.joined() // added already
 	}
-	return r, d, b.appendConfig(r, &d, config)
+	return r, b.appendConfig(r, d, config)
 }
 
 // joined replies to the additions of members now voters by the

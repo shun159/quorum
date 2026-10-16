@@ -171,29 +171,29 @@ func pause(ctx context.Context, d time.Duration) error {
 
 // call handles a call from outside the group: a command from a client, or
 // the founding of the group.
-func (b behaviour[S, Cmd, Rep]) call(r role, d replica[S], c genstatem.Call) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) call(r role, d *replica[S], c genstatem.Call) (role, []actor.Effect) {
 	switch c.Req.(type) {
 	case command, openSession, addMember, removeMember:
 		if r == leader && d.transfer != nil {
-			return r, d, actor.Do(c.Reply(busy{})) // handing over
+			return r, actor.Do(c.Reply(busy{})) // handing over
 		}
 	}
 	switch c.Req.(type) {
 	case command, openSession, read, addMember, removeMember, transferLeader:
 		if r == leader {
-			waking := b.wake(&d)
-			r, d, effs := b.serve(r, d, c)
-			return r, d, append(waking, effs...)
+			waking := b.wake(d)
+			r, effs := b.serve(r, d, c)
+			return r, append(waking, effs...)
 		}
 	}
 	return b.serve(r, d, c)
 }
 
 // serve handles the call c.
-func (b behaviour[S, Cmd, Rep]) serve(r role, d replica[S], c genstatem.Call) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) serve(r role, d *replica[S], c genstatem.Call) (role, []actor.Effect) {
 	switch m := c.Req.(type) {
 	case whoLeads:
-		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
+		return r, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	case command:
 		return b.command(r, d, c, m)
 	case openSession:
@@ -201,7 +201,7 @@ func (b behaviour[S, Cmd, Rep]) serve(r role, d replica[S], c genstatem.Call) (r
 	case read:
 		return b.read(r, d, c, m)
 	case identify:
-		return r, d, d.after(c.Reply(identity{ID: d.id, Blank: d.log.lastIndex() == 0}))
+		return r, d.after(c.Reply(identity{ID: d.id, Blank: d.log.lastIndex() == 0}))
 	case found:
 		return b.found(r, d, c, m)
 	case addMember, removeMember:
@@ -209,21 +209,21 @@ func (b behaviour[S, Cmd, Rep]) serve(r role, d replica[S], c genstatem.Call) (r
 	case transferLeader:
 		return b.transferLeader(r, d, c, m)
 	}
-	return r, d, nil
+	return r, nil
 }
 
 // command handles a command. The leader appends it, and replies once it is
 // applied; another member tells where the leader is.
-func (b behaviour[S, Cmd, Rep]) command(r role, d replica[S], c genstatem.Call, m command) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) command(r role, d *replica[S], c genstatem.Call, m command) (role, []actor.Effect) {
 	if _, ok := m.Cmd.(Cmd); !ok {
 		var want Cmd
 		reason := fmt.Sprintf("quorum: group %s takes commands of type %T, not %T", b.spec.Group, want, m.Cmd)
-		return r, d, actor.Do(c.Reply(rejected{reason}))
+		return r, actor.Do(c.Reply(rejected{reason}))
 	}
 	if r != leader {
-		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
+		return r, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	}
-	return r, d, b.appendCall(r, &d, c, Entry{Cmd: m.Cmd, From: m.From})
+	return r, b.appendCall(r, d, c, Entry{Cmd: m.Cmd, From: m.From})
 }
 
 // appendCall has the leader append e, to reply to the call c once it is
@@ -238,9 +238,9 @@ func (b behaviour[S, Cmd, Rep]) appendCall(r role, d *replica[S], c genstatem.Ca
 
 // openSession handles the opening of a session: the leader appends it,
 // and replies with its ID once it is applied.
-func (b behaviour[S, Cmd, Rep]) openSession(r role, d replica[S], c genstatem.Call) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) openSession(r role, d *replica[S], c genstatem.Call) (role, []actor.Effect) {
 	if r != leader {
-		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
+		return r, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	}
-	return r, d, b.appendCall(r, &d, c, Entry{Open: true})
+	return r, b.appendCall(r, d, c, Entry{Open: true})
 }

@@ -172,8 +172,10 @@ func seed(group, self string) uint64 {
 	return h.Sum64()
 }
 
+// HandleEvent handles ev on d, its own copy of the replica: the handlers
+// change it through a pointer, as copying it at every call costs.
 func (b behaviour[S, Cmd, Rep]) HandleEvent(r role, d replica[S], ev genstatem.Event) (role, replica[S], []actor.Effect) {
-	r, d, effs := b.handleEvent(r, d, ev)
+	r, effs := b.handleEvent(r, &d, ev)
 	if _, entering := ev.(genstatem.Enter[role]); !entering && r == leader && d.left() {
 		return follower, d, effs
 	}
@@ -204,7 +206,7 @@ func (d *replica[S]) logChanged(from uint64) {
 	}
 }
 
-func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.Event) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d *replica[S], ev genstatem.Event) (role, []actor.Effect) {
 	switch e := ev.(type) {
 	case genstatem.Enter[role]:
 		return b.enter(r, e.Old, d)
@@ -231,36 +233,35 @@ func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d replica[S], ev genstatem.E
 		}
 		return b.message(r, d, e.Msg)
 	}
-	return r, d, nil
+	return r, nil
 }
 
 // enter runs on every change of role, and on starting, as a follower.
-func (b behaviour[S, Cmd, Rep]) enter(r, old role, d replica[S]) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) enter(r, old role, d *replica[S]) (role, []actor.Effect) {
 	var effs []actor.Effect
 	if old == leader && r != leader {
-		effs = b.surrender(&d)
+		effs = b.surrender(d)
 		d.quiet = false
 	}
 	switch r {
 	case follower:
 		effs = append(effs, d.electionTimer(b.spec.ElectionTimeout))
 	case leader:
-		effs = append(effs, b.lead(&d)...)
+		effs = append(effs, b.lead(d)...)
 	}
-	return r, d, effs
+	return r, effs
 }
 
 // timeout is the state timeout: a voter that heard from no leader asks
 // whether it would be elected; the leader beats. A member not voting
 // waits on.
-func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) timeout(r role, d *replica[S]) (role, []actor.Effect) {
 	switch {
 	case r == leader:
-		d, effs := b.beat(d)
-		return r, d, effs
+		return r, b.beat(d)
 	case !d.config.isVoter(d.id):
 		d.leader = proc.PID{} // heard from none: it would vote, for those counting it a voter
-		return r, d, actor.Do(d.electionTimer(b.spec.ElectionTimeout))
+		return r, actor.Do(d.electionTimer(b.spec.ElectionTimeout))
 	}
 	return b.preStand(d)
 }
@@ -268,9 +269,9 @@ func (b behaviour[S, Cmd, Rep]) timeout(r role, d replica[S]) (role, replica[S],
 // message handles a message from another member. One of a later term
 // makes the member a follower in that term first, whatever it was, which
 // it saves.
-func (b behaviour[S, Cmd, Rep]) message(r role, d replica[S], msg any) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) message(r role, d *replica[S], msg any) (role, []actor.Effect) {
 	if m, ok := msg.(addressed); ok && m.to() != d.id {
-		return r, d, nil // for an earlier member on this node
+		return r, nil // for an earlier member on this node
 	}
 	var saving []actor.Effect
 	if m, ok := msg.(termed); ok && m.term() > d.term {
@@ -279,13 +280,13 @@ func (b behaviour[S, Cmd, Rep]) message(r role, d replica[S], msg any) (role, re
 		}
 		r = follower
 		d.newTerm(m.term())
-		saving = append(saving, b.saveState(&d)...)
+		saving = append(saving, b.saveState(d)...)
 	}
-	r, d, effs := b.handle(r, d, msg)
-	return r, d, append(saving, effs...)
+	r, effs := b.handle(r, d, msg)
+	return r, append(saving, effs...)
 }
 
-func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) handle(r role, d *replica[S], msg any) (role, []actor.Effect) {
 	switch m := msg.(type) {
 	case preVote:
 		return b.preVote(r, d, m)
@@ -306,7 +307,7 @@ func (b behaviour[S, Cmd, Rep]) handle(r role, d replica[S], msg any) (role, rep
 	case timeoutNow:
 		return b.timeoutNow(r, d, m)
 	}
-	return r, d, nil
+	return r, nil
 }
 
 // newTerm moves the member to a later term, in which it has not voted,

@@ -32,20 +32,20 @@ var errHead = errors.New("the head of a snapshot past its end")
 // installSnapshot takes a chunk of the leader's snapshot, for a member
 // missing entries the leader has no more, and tells how much it has; with
 // the last, it installs the snapshot.
-func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d replica[S], m installSnapshot) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d *replica[S], m installSnapshot) (role, []actor.Effect) {
 	if m.Term < d.term {
-		return r, d, d.after(b.send(m.Leader, appendReply{Term: d.term, From: d.id}))
+		return r, d.after(b.send(m.Leader, appendReply{Term: d.term, From: d.id}))
 	}
 	r, d.leader = follower, m.Leader
 	effs := []actor.Effect{d.electionTimer(b.spec.ElectionTimeout)}
 	if m.Index <= d.commit {
 		d.incoming = receiving{}
 		reply := appendReply{Term: d.term, From: d.id, Success: true, Match: m.Index}
-		return r, d, append(effs, d.after(b.send(m.Leader, reply))...) // committed here already
+		return r, append(effs, d.after(b.send(m.Leader, reply))...) // committed here already
 	}
 	if has := d.receive(m); has < m.Size {
 		ack := snapshotAck{Term: d.term, From: d.id, Index: m.Index, Offset: has}
-		return r, d, append(effs, b.send(m.Leader, ack))
+		return r, append(effs, b.send(m.Leader, ack))
 	}
 	var snap Snapshot
 	err := errHead
@@ -54,9 +54,9 @@ func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d replica[S], m installS
 	}
 	d.incoming = receiving{}
 	if err != nil {
-		return r, d, actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot decode a snapshot: %w", b.spec.Group, err)})
+		return r, actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot decode a snapshot: %w", b.spec.Group, err)})
 	}
-	return r, d, append(effs, b.install(&d, snap)...)
+	return r, append(effs, b.install(d, snap)...)
 }
 
 // install replaces the log up to snap, and the machine: the entries after

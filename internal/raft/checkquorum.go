@@ -27,16 +27,16 @@ func (b behaviour[S, Cmd, Rep]) quorumTimer() actor.Effect {
 
 // checkQuorum has the leader step down if it has not heard from a
 // majority within the last ElectionTimeout.
-func (b behaviour[S, Cmd, Rep]) checkQuorum(r role, d replica[S]) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) checkQuorum(r role, d *replica[S]) (role, []actor.Effect) {
 	if r != leader {
-		return r, d, nil
+		return r, nil
 	}
 	if d.heardFrom() < d.config.majority() {
 		d.leader = proc.PID{}
-		return follower, d, nil
+		return follower, nil
 	}
 	d.round++
-	return r, d, actor.Do(b.quorumTimer())
+	return r, actor.Do(b.quorumTimer())
 }
 
 // heard notes that the leader heard from the member of p, in this round.

@@ -26,13 +26,13 @@ func (d *replica[S]) electionTimer(base time.Duration) actor.Effect {
 // then waiting a whole timeout from there; the candidate, its timer
 // started earlier, would stand again first, and again, never giving it a
 // vote.
-func (b behaviour[S, Cmd, Rep]) stand(d replica[S]) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) stand(d *replica[S]) (role, []actor.Effect) {
 	d.term++
 	d.votedFor, d.leader = d.id, proc.PID{}
 	d.votes = []proc.PID{d.id}
-	effs := b.saveState(&d)
+	effs := b.saveState(d)
 	if b.won(d) {
-		return leader, d, effs // the only voter
+		return leader, effs // the only voter
 	}
 	effs = append(effs, d.electionTimer(b.spec.ElectionTimeout))
 	ask := requestVote{Term: d.term, Candidate: d.id, LastIndex: d.log.lastIndex(), LastTerm: d.log.lastTerm()}
@@ -40,7 +40,7 @@ func (b behaviour[S, Cmd, Rep]) stand(d replica[S]) (role, replica[S], []actor.E
 	for _, id := range d.others() {
 		asks = append(asks, b.send(id, ask))
 	}
-	return candidate, d, append(effs, d.after(asks...)...)
+	return candidate, append(effs, d.after(asks...)...)
 }
 
 // requestVote answers a candidate. A member votes once in a term, for a
@@ -52,34 +52,34 @@ func (b behaviour[S, Cmd, Rep]) stand(d replica[S]) (role, replica[S], []actor.E
 // (4.2.3): the candidate counts the votes of the voters of its own. A
 // learner made a voter by entries it misses must vote all the same: the
 // candidate holding them may need its vote to lead, and to send them.
-func (b behaviour[S, Cmd, Rep]) requestVote(r role, d replica[S], m requestVote) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) requestVote(r role, d *replica[S], m requestVote) (role, []actor.Effect) {
 	grant := m.Term == d.term &&
 		(d.votedFor.IsZero() || d.votedFor == m.Candidate) &&
 		d.log.notAheadOf(m.LastIndex, m.LastTerm)
 	var effs []actor.Effect
 	if grant {
 		d.votedFor = m.Candidate
-		effs = append(b.saveState(&d), d.electionTimer(b.spec.ElectionTimeout))
+		effs = append(b.saveState(d), d.electionTimer(b.spec.ElectionTimeout))
 	}
 	reply := b.send(m.Candidate, voteReply{Term: d.term, From: d.id, Granted: grant})
-	return r, d, append(effs, d.after(reply)...)
+	return r, append(effs, d.after(reply)...)
 }
 
 // voteReply counts a vote for the candidate: a majority of the voters
 // makes it the leader.
-func (b behaviour[S, Cmd, Rep]) voteReply(r role, d replica[S], m voteReply) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) voteReply(r role, d *replica[S], m voteReply) (role, []actor.Effect) {
 	if r != candidate || m.Term != d.term || !m.Granted || slices.Contains(d.votes, m.From) {
-		return r, d, nil
+		return r, nil
 	}
 	d.votes = append(d.votes, m.From)
 	if b.won(d) {
-		return leader, d, nil
+		return leader, nil
 	}
-	return r, d, nil
+	return r, nil
 }
 
 // won reports whether a majority of the voters voted for the candidate.
-func (b behaviour[S, Cmd, Rep]) won(d replica[S]) bool {
+func (b behaviour[S, Cmd, Rep]) won(d *replica[S]) bool {
 	count := 0
 	for _, v := range d.votes {
 		if d.config.isVoter(v) {
