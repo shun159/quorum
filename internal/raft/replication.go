@@ -59,7 +59,10 @@ func (b behaviour[S, Cmd, Rep]) heartbeat(d *replica[S]) []actor.Effect {
 		if !p.sent {
 			effs = append(effs, b.appendTo(d, p)...)
 		}
-		d.peer(p.id).sent = false
+	}
+	d.peers = slices.Clone(d.peers)
+	for i := range d.peers {
+		d.peers[i].sent = false
 	}
 	return append(effs, genstatem.StartStateTimeout{After: b.spec.Heartbeat})
 }

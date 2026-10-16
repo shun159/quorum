@@ -54,10 +54,12 @@ func (s Sessions) passed(t int64, timeout time.Duration) Sessions {
 		return s
 	}
 	s.Sweep = s.Time + int64(timeout/4)
+	stale := func(_ uint64, ss Session) bool { return s.Time-ss.Last > int64(timeout) }
 	for id, ss := range s.Open {
-		if s.Time-ss.Last > int64(timeout) {
+		if stale(id, ss) {
 			s.Open = maps.Clone(s.Open)
-			delete(s.Open, id)
+			maps.DeleteFunc(s.Open, stale)
+			break
 		}
 	}
 	return s
