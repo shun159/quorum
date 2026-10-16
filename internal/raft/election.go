@@ -28,8 +28,9 @@ func (d *replica[S]) electionTimer(base time.Duration) actor.Effect {
 // vote.
 func (b behaviour[S, Cmd, Rep]) stand(d *replica[S]) (role, []actor.Effect) {
 	d.term++
-	d.votedFor, d.leader = d.id, proc.PID{}
-	d.votes = []proc.PID{d.id}
+	d.leader = proc.PID{}
+	d.rarely().votedFor = d.id
+	d.rarely().votes = []proc.PID{d.id}
 	effs := b.saveState(d)
 	if b.won(d) {
 		return leader, effs // the only voter
@@ -58,7 +59,7 @@ func (b behaviour[S, Cmd, Rep]) requestVote(r role, d *replica[S], m requestVote
 		d.log.notAheadOf(m.LastIndex, m.LastTerm)
 	var effs []actor.Effect
 	if grant {
-		d.votedFor = m.Candidate
+		d.rarely().votedFor = m.Candidate
 		effs = append(b.saveState(d), d.electionTimer(b.spec.ElectionTimeout))
 	}
 	reply := b.send(m.Candidate, voteReply{Term: d.term, From: d.id, Granted: grant})
@@ -71,7 +72,7 @@ func (b behaviour[S, Cmd, Rep]) voteReply(r role, d *replica[S], m voteReply) (r
 	if r != candidate || m.Term != d.term || !m.Granted || slices.Contains(d.votes, m.From) {
 		return r, nil
 	}
-	d.votes = append(d.votes, m.From)
+	d.rarely().votes = append(d.rarely().votes, m.From)
 	if b.won(d) {
 		return leader, nil
 	}

@@ -15,7 +15,8 @@ const maxEntries = 64
 // its own, which commits the entries of earlier terms with it, tells the
 // others, and starts beating.
 func (b behaviour[S, Cmd, Rep]) lead(d *replica[S]) []actor.Effect {
-	d.leader, d.votes, d.timeAt = d.id, nil, 0
+	d.leader, d.timeAt = d.id, 0
+	d.rarely().votes = nil
 	d.log = d.log.add(b.entry(d, Entry{}))
 	d.peers, d.round = nil, 0
 	for _, id := range d.others() {
@@ -43,7 +44,8 @@ func (b behaviour[S, Cmd, Rep]) surrender(d *replica[S]) []actor.Effect {
 	for _, rd := range d.reads {
 		effs = append(effs, actor.Reply{To: rd.from, Value: redirect{}}) // to read again
 	}
-	d.pending, d.joining, d.reads, d.peers = nil, nil, nil, nil
+	d.pending, d.reads, d.peers = nil, nil, nil
+	d.rarely().joining = nil
 	if l, ok := b.spec.Machine.(Leader[S]); ok {
 		effs = append(effs, l.Surrendered(d.state)...)
 	}

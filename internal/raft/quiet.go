@@ -109,11 +109,11 @@ func (d *replica[S]) wakeTimer(base time.Duration) actor.Effect {
 // quiet follower whose leader's node is lost stops following it; a quiet
 // leader that hears from no majority steps down.
 func (b behaviour[S, Cmd, Rep]) nodeEvent(r role, d *replica[S], node string, lost bool) (role, []actor.Effect) {
-	d.unheard = slices.DeleteFunc(slices.Clone(d.unheard), func(n string) bool { return n == node })
+	d.rarely().unheard = slices.DeleteFunc(slices.Clone(d.unheard), func(n string) bool { return n == node })
 	if !lost {
 		return r, nil
 	}
-	d.unheard = append(d.unheard, node)
+	d.rarely().unheard = append(d.rarely().unheard, node)
 	switch {
 	case r == follower && d.quiet && d.leader.Node() == node:
 		return r, d.unhush(d.wakeTimer(b.spec.ElectionTimeout))

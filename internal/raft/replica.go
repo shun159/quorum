@@ -31,37 +31,31 @@ type replica[S any] struct {
 	id  proc.PID // who the member is, see Config
 	rng rand.PCG // draws its election timeouts
 
-	term     uint64   // the latest term it knows
-	votedFor proc.PID // in term, if it voted
-	leader   proc.PID // of term, once known
+	*rare       // what it changes rarely, apart
+	owned *rare // rare, if copied in this event: the member's to change
+
+	term   uint64   // the latest term it knows
+	leader proc.PID // of term, once known
 
 	log      raftLog
-	snapshot Snapshot // of the entries up to log.start
-	config   Config   // the latest in the log
-	configAt uint64   // its index
 	commit   uint64   // the last index known committed
 	applied  uint64   // the last index applied to state
 	state    S        // of the machine
 	sessions Sessions // of the clients, as of applied
 
-	votes   []proc.PID // granted to it, as a candidate or precandidate
-	peers   []peer     // the other members, as the leader
-	pending []pending  // commands to reply to, as the leader, by index
-	joining []joining  // members added, to reply to once voters, as the leader
-	reads   []reading  // reads to answer, as the leader
-	readSeq uint64     // its last round of confirming reads, as the leader
-	timeAt  uint64     // the entry bringing the time of the log to its clock, for reads, as the leader
+	peers   []peer    // the other members, as the leader
+	pending []pending // commands to reply to, as the leader, by index
+	reads   []reading // reads to answer, as the leader
+	readSeq uint64    // its last round of confirming reads, as the leader
+	timeAt  uint64    // the entry bringing the time of the log to its clock, for reads, as the leader
 
 	compacting bool   // a snapshot taken to compact the log is being saved
 	round      uint64 // of the checks of the quorum, as the leader
 
 	transfer *transferring // the leader handing over, if it is
 
-	quiet   bool     // the group is quiet, see Quiet
-	idle    int      // the beats in a row with nothing to do, as the leader
-	unheard []string // the nodes silent or down, as dist tells
-
-	incoming receiving // the snapshot coming from the leader, as a follower
+	quiet bool // the group is quiet, see Quiet
+	idle  int  // the beats in a row with nothing to do, as the leader
 
 	seq    uint64 // of the last write to the storage
 	saved  uint64 // seq of the last write known durable
@@ -134,12 +128,12 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s cannot load what it saved: %w", b.spec.Group, err)
 	}
 	d := replica[S]{
-		id:       saved.State.Self,
-		rng:      *rand.NewPCG(seed(b.spec.Group, self.String()), 0),
-		state:    b.spec.Machine.Init(),
-		term:     saved.State.Term,
-		votedFor: saved.State.VotedFor,
-		log:      logOf(saved.Log...),
+		id:    saved.State.Self,
+		rng:   *rand.NewPCG(seed(b.spec.Group, self.String()), 0),
+		state: b.spec.Machine.Init(),
+		term:  saved.State.Term,
+		log:   logOf(saved.Log...),
+		rare:  &rare{votedFor: saved.State.VotedFor},
 	}
 	if saved.Snapshot.Index > 0 {
 		snap, err := b.decode(saved.Snapshot.Encoded)
@@ -150,7 +144,8 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		if !ok {
 			return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s saved a snapshot of a %T", b.spec.Group, snap.State)
 		}
-		d.snapshot, d.state, d.sessions = snap, state, snap.Sessions
+		d.rarely().snapshot = snap
+		d.state, d.sessions = state, snap.Sessions
 		d.log = raftLog{start: snap.Index, startTerm: snap.Term, startConfig: snap.Config, entries: saved.Log}
 		d.commit, d.applied = snap.Index, snap.Index
 	}
@@ -175,6 +170,7 @@ func seed(group, self string) uint64 {
 // HandleEvent handles ev on d, its own copy of the replica: the handlers
 // change it through a pointer, as copying it at every call costs.
 func (b behaviour[S, Cmd, Rep]) HandleEvent(r role, d replica[S], ev genstatem.Event) (role, replica[S], []actor.Effect) {
+	d.owned = nil // of the event before, shared with the replica given
 	r, effs := b.handleEvent(r, &d, ev)
 	if _, entering := ev.(genstatem.Enter[role]); !entering && r == leader && d.left() {
 		return follower, d, effs
@@ -195,12 +191,12 @@ func (d *replica[S]) left() bool {
 // it alone, however long its log.
 func (d *replica[S]) logChanged(from uint64) {
 	if from <= d.configAt {
-		d.config, d.configAt = d.log.config() // the one in force changed: look back for it
+		d.rarely().config, d.rarely().configAt = d.log.config() // the one in force changed: look back for it
 		return
 	}
 	for i := d.log.lastIndex(); i >= from; i-- {
 		if c := d.log.at(i).Config; c != nil {
-			d.config, d.configAt = *c, i
+			d.rarely().config, d.rarely().configAt = *c, i
 			return
 		}
 	}
@@ -313,8 +309,9 @@ func (b behaviour[S, Cmd, Rep]) handle(r role, d *replica[S], msg any) (role, []
 // newTerm moves the member to a later term, in which it has not voted,
 // and knows no leader yet.
 func (d *replica[S]) newTerm(term uint64) {
-	d.term, d.votedFor, d.leader = term, proc.PID{}, proc.PID{}
-	d.incoming = receiving{}
+	d.term, d.leader = term, proc.PID{}
+	d.rarely().votedFor = proc.PID{}
+	d.rarely().incoming = receiving{}
 }
 
 // others returns the members other than this one.
@@ -331,4 +328,30 @@ func (b behaviour[S, Cmd, Rep]) send(id proc.PID, msg any) actor.Effect {
 // group, whatever process it is now.
 func (b behaviour[S, Cmd, Rep]) at(id proc.PID) actor.Remote {
 	return actor.Remote{Node: id.Node(), Name: replicaName(b.spec.Group)}
+}
+
+// rare is what a member changes rarely, as it votes, its members change,
+// or it takes or gets a snapshot. Apart from the replica, behind a pointer,
+// it is not copied with it at every event, as genstatem copies the data
+// of a machine. It is a value too, shared with the replicas before: the
+// member changes it through rarely, which copies it first.
+type rare struct {
+	votedFor proc.PID   // in term, if it voted
+	snapshot Snapshot   // of the entries up to log.start
+	config   Config     // the latest in the log
+	configAt uint64     // its index
+	votes    []proc.PID // granted to it, as a candidate or precandidate
+	joining  []joining  // members added, to reply to once voters, as the leader
+	unheard  []string   // the nodes silent or down, as dist tells
+	incoming receiving  // the snapshot coming from the leader, as a follower
+}
+
+// rarely returns the rare part of the member to change: a copy of it, made
+// once an event, which the member reads from then on too.
+func (d *replica[S]) rarely() *rare {
+	if d.owned != d.rare {
+		c := *d.rare
+		d.rare, d.owned = &c, &c
+	}
+	return d.rare
 }

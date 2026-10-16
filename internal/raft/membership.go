@@ -94,7 +94,7 @@ func (b behaviour[S, Cmd, Rep]) change(r role, d *replica[S], c genstatem.Call, 
 	case err != nil:
 		return r, actor.Do(c.Reply(rejected{err.Error()}))
 	case adding:
-		d.joining = append(d.joining, joining{id: add.ID, from: c.From})
+		d.rarely().joining = append(d.rarely().joining, joining{id: add.ID, from: c.From})
 	case sameConfig(config, d.config):
 		return r, actor.Do(c.Reply(applied{}))
 	default:
@@ -126,7 +126,7 @@ func (d *replica[S]) joined() []actor.Effect {
 			waiting = append(waiting, j)
 		}
 	}
-	d.joining = waiting
+	d.rarely().joining = waiting
 	return effs
 }
 
