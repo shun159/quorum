@@ -48,6 +48,7 @@ func (b behaviour[S, Cmd, Rep]) read(r role, d replica[S], c genstatem.Call, m r
 	after, effs := b.timeForRead(&d)
 	d.reads = append(d.reads, reading{seq: d.readSeq, after: after, cmd: m.Cmd, from: c.From})
 	effs = append(effs, b.replicate(&d)...)
+	effs = append(effs, b.commit(r, &d)...) // the entry of its time, held alone and durable at once
 	return r, d, append(effs, b.serveReads(&d)...)
 }
 

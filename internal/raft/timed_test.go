@@ -64,6 +64,25 @@ func TestTimed(t *testing.T) {
 	}
 }
 
+// A member alone without a storage commits the entry of its time for a
+// read as it appends it: no reply, nor write, comes to tell it holds it.
+func TestTimedAloneWithoutStorage(t *testing.T) {
+	g := unfounded(t, 1, []string{"a"}, func(string) Machine[int, int, int] { return clocked{} })
+	spec := g.specs["a"]
+	spec.Storage = nil
+	g.specs["a"] = spec
+	g.s.Crash("a")
+	g.restart("a")
+	g.found()
+	if _, err := g.command(0); err != nil {
+		t.Fatal(err)
+	}
+	g.s.Advance(time.Minute)
+	if _, err := g.ask(read{0}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The clocks of the members are off from each other: commands are applied
 // at times going forward all the same, and a command after a read, at a
 // time no earlier than the read's.
