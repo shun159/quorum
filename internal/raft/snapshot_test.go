@@ -57,7 +57,7 @@ func TestInstallSnapshot(t *testing.T) {
 		b.spec.Machine = c.machine
 		d = withCommands(d, 4)
 		snap := Snapshot{Index: 3, Term: c.term, Config: d.config, State: 7}
-		data, err := b.encodedSnapshot(&replica[int]{snapshot: snap})
+		data, err := b.encodedSnapshot(&replica[int]{rare: &rare{snapshot: snap}})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -15,7 +15,7 @@ func (b behaviour[S, Cmd, Rep]) takeSnapshot(d *replica[S]) []actor.Effect {
 	if d.applied-d.log.start < b.spec.SnapshotEvery {
 		return nil
 	}
-	d.snapshot = Snapshot{
+	d.rarely().snapshot = Snapshot{
 		Index:  d.applied,
 		Term:   d.log.termAt(d.applied),
 		Config: d.log.configUpTo(d.applied),
@@ -39,7 +39,7 @@ func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d *replica[S], m install
 	r, d.leader = follower, m.Leader
 	effs := []actor.Effect{d.electionTimer(b.spec.ElectionTimeout)}
 	if m.Index <= d.commit {
-		d.incoming = receiving{}
+		d.rarely().incoming = receiving{}
 		reply := appendReply{Term: d.term, From: d.id, Success: true, Match: m.Index}
 		return r, append(effs, d.after(b.send(m.Leader, reply))...) // committed here already
 	}
@@ -52,7 +52,7 @@ func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d *replica[S], m install
 	if data := d.incoming.data; m.Head <= len(data) {
 		snap, err = b.decode(Encoded{Head: data[:m.Head], State: data[m.Head:]})
 	}
-	d.incoming = receiving{}
+	d.rarely().incoming = receiving{}
 	if err != nil {
 		return r, actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot decode a snapshot: %w", b.spec.Group, err)})
 	}
@@ -64,7 +64,8 @@ func (b behaviour[S, Cmd, Rep]) installSnapshot(r role, d *replica[S], m install
 // member replies once it is saved.
 func (b behaviour[S, Cmd, Rep]) install(d *replica[S], snap Snapshot) []actor.Effect {
 	keep := d.log.has(snap.Index, snap.Term)
-	d.snapshot, d.state, d.sessions = snap, snap.State.(S), snap.Sessions
+	d.rarely().snapshot = snap
+	d.state, d.sessions = snap.State.(S), snap.Sessions
 	d.log = d.log.compact(snap, keep)
 	d.logChanged(0)
 	d.commit, d.applied = snap.Index, snap.Index

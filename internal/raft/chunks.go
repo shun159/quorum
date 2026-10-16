@@ -147,12 +147,12 @@ func (d *replica[S]) receive(m installSnapshot) int {
 			return 0
 		}
 		in = receiving{leader: m.Leader, index: m.Index, data: make([]byte, 0, m.Size)}
-		d.incoming = in
 	}
 	if len(in.data) == m.Offset {
-		d.incoming.data = append(in.data, m.Data...)
+		in.data = append(in.data, m.Data...)
 	}
-	return len(d.incoming.data)
+	d.rarely().incoming = in
+	return len(in.data)
 }
 
 // snapshotArrived notes that the snapshot p was sent arrived, once m

@@ -14,7 +14,7 @@ import (
 // would depose the leader for nothing. A majority would, and it stands.
 func (b behaviour[S, Cmd, Rep]) preStand(d *replica[S]) (role, []actor.Effect) {
 	d.leader = proc.PID{}
-	d.votes = []proc.PID{d.id}
+	d.rarely().votes = []proc.PID{d.id}
 	if b.won(d) {
 		return b.stand(d) // the only voter
 	}
@@ -65,7 +65,7 @@ func (b behaviour[S, Cmd, Rep]) preVoteReply(r role, d *replica[S], m preVoteRep
 	case r != precandidate || !m.Granted || m.Term != d.term+1 || slices.Contains(d.votes, m.From):
 		return r, nil
 	}
-	d.votes = append(d.votes, m.From)
+	d.rarely().votes = append(d.rarely().votes, m.From)
 	if b.won(d) {
 		return b.stand(d)
 	}
