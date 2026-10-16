@@ -4,5 +4,5 @@ go 1.27.0
 
 require (
 	github.com/anishathalye/porcupine v1.3.1
-	github.com/shun159/molecule v0.15.0
+	github.com/shun159/molecule v0.15.1
 )
