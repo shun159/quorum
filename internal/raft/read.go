@@ -34,22 +34,22 @@ type reading struct {
 // whether it still leads; another member tells where the leader is. A
 // leader just elected has the read wait until its first entry is
 // committed, before which it does not know what is.
-func (b behaviour[S, Cmd, Rep]) read(r role, d replica[S], c genstatem.Call, m read) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) read(r role, d *replica[S], c genstatem.Call, m read) (role, []actor.Effect) {
 	if reason := b.unreadable(m.Cmd); reason != "" {
-		return r, d, actor.Do(c.Reply(rejected{reason}))
+		return r, actor.Do(c.Reply(rejected{reason}))
 	}
 	switch {
 	case r != leader:
-		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
+		return r, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	case d.log.termAt(d.commit) != d.term:
-		return r, d, actor.Do(c.Reply(busy{}))
+		return r, actor.Do(c.Reply(busy{}))
 	}
 	d.readSeq++
-	after, effs := b.timeForRead(&d)
+	after, effs := b.timeForRead(d)
 	d.reads = append(d.reads, reading{seq: d.readSeq, after: after, cmd: m.Cmd, from: c.From})
-	effs = append(effs, b.replicate(&d)...)
-	effs = append(effs, b.commit(r, &d)...) // the entry of its time, held alone and durable at once
-	return r, d, append(effs, b.serveReads(&d)...)
+	effs = append(effs, b.replicate(d)...)
+	effs = append(effs, b.commit(r, d)...) // the entry of its time, held alone and durable at once
+	return r, append(effs, b.serveReads(d)...)
 }
 
 // timeForRead brings the time of the log to the leader's clock, for a

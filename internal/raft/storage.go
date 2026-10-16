@@ -168,17 +168,17 @@ func (b behaviour[S, Cmd, Rep]) isDurable(msg any) (tag any, err error, ok bool)
 // durable learns that the writes up to the one of tag are durable: the
 // member tells what waited on them, and the leader counts itself as
 // holding the entries written. A member that cannot save stops.
-func (b behaviour[S, Cmd, Rep]) durable(r role, d replica[S], tag any, err error) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) durable(r role, d *replica[S], tag any, err error) (role, []actor.Effect) {
 	if err != nil {
-		return r, d, actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot save: %w", b.spec.Group, err)})
+		return r, actor.Do(actor.Stop{Reason: fmt.Errorf("quorum: group %s cannot save: %w", b.spec.Group, err)})
 	}
 	if tag == (compacted{}) {
 		d.compacting = false
-		return r, d, nil
+		return r, nil
 	}
 	t, ok := tag.(writeTag)
 	if !ok || t.Seq <= d.saved {
-		return r, d, nil // known durable already, with a later one
+		return r, nil // known durable already, with a later one
 	}
 	d.saved, d.stable = t.Seq, t.Index
 	var effs []actor.Effect
@@ -190,7 +190,7 @@ func (b behaviour[S, Cmd, Rep]) durable(r role, d replica[S], tag any, err error
 		d.held = nil // let the array go, with what its slots told
 	}
 	if r == leader {
-		effs = append(effs, b.commit(r, &d)...)
+		effs = append(effs, b.commit(r, d)...)
 	}
-	return r, d, effs
+	return r, effs
 }

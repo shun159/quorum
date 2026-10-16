@@ -86,7 +86,7 @@ func TestAckWaitsForDurable(t *testing.T) {
 // A candidate asks for votes once its own is saved.
 func TestStandWaitsForDurable(t *testing.T) {
 	b, d := member(t)
-	r, d, effs := b.stand(d)
+	r, effs := b.stand(&d)
 	if r != candidate || len(sent(effs)) != 0 {
 		t.Fatalf("%v, told %v before its vote was saved", r, sent(effs))
 	}

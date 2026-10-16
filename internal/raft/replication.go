@@ -109,41 +109,41 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d *replica[S], p peer) []actor.Effect {
 // appendEntries takes the entries of the leader, if the log matches the
 // leader's up to them, and replies how far it now matches, once they are
 // saved.
-func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d replica[S], m appendEntries) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d *replica[S], m appendEntries) (role, []actor.Effect) {
 	if m.Term < d.term {
 		// From a leader deposed, which learns of the later term.
-		return r, d, d.after(b.send(m.Leader, appendReply{Term: d.term, From: d.id}))
+		return r, d.after(b.send(m.Leader, appendReply{Term: d.term, From: d.id}))
 	}
 	// From the leader of the term: a candidate in it has lost.
 	r, d.leader = follower, m.Leader
 	if !d.log.has(m.PrevIndex, m.PrevTerm) {
 		reply := appendReply{Term: d.term, From: d.id, LastIndex: d.log.lastIndex(), Read: m.Read}
-		return r, d, append(b.follow(&d, false), d.after(b.send(m.Leader, reply))...)
+		return r, append(b.follow(d, false), d.after(b.send(m.Leader, reply))...)
 	}
 	var effs []actor.Effect
 	log, changed := d.log.merge(m.PrevIndex, m.Entries)
 	if changed > 0 {
 		d.log = log
 		d.logChanged(changed)
-		effs = append(effs, b.saveLog(&d, changed)...)
+		effs = append(effs, b.saveLog(d, changed)...)
 	}
 	match := m.PrevIndex + uint64(len(m.Entries))
 	d.commit = max(d.commit, min(m.Commit, match))
-	effs = append(effs, b.follow(&d, m.Quiet && match == d.log.lastIndex() && d.commit == match)...)
-	effs = append(effs, b.apply(r, &d)...)
+	effs = append(effs, b.follow(d, m.Quiet && match == d.log.lastIndex() && d.commit == match)...)
+	effs = append(effs, b.apply(r, d)...)
 	reply := appendReply{Term: d.term, From: d.id, Success: true, Match: match, Read: m.Read}
-	return r, d, append(effs, d.after(b.send(m.Leader, reply))...)
+	return r, append(effs, d.after(b.send(m.Leader, reply))...)
 }
 
 // appendReply learns how far the log of a member matches the leader's, and
 // sends it what it still misses: from further back, if it failed.
-func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) appendReply(r role, d *replica[S], m appendReply) (role, []actor.Effect) {
 	if r != leader || m.Term != d.term {
-		return r, d, nil
+		return r, nil
 	}
 	p := d.peer(m.From)
 	if p == nil {
-		return r, d, nil
+		return r, nil
 	}
 	d.heard(p)
 	p.read = max(p.read, m.Read)
@@ -151,17 +151,17 @@ func (b behaviour[S, Cmd, Rep]) appendReply(r role, d replica[S], m appendReply)
 	if !m.Success {
 		p.matched = false
 		p.next = max(1, min(p.next-1, m.LastIndex+1))
-		return r, d, append(b.serveReads(&d), b.appendTo(&d, *p)...)
+		return r, append(b.serveReads(d), b.appendTo(d, *p)...)
 	}
 	p.match, p.matched = max(p.match, m.Match), true
 	p.next = max(p.next, p.match+1)
 	progress := *p
-	effs := append(b.serveReads(&d), b.commit(r, &d)...)
+	effs := append(b.serveReads(d), b.commit(r, d)...)
 	if progress.next <= d.log.lastIndex() {
-		effs = append(effs, b.appendTo(&d, progress)...)
+		effs = append(effs, b.appendTo(d, progress)...)
 	}
-	effs = append(effs, b.handOver(&d)...)
-	return r, d, append(effs, b.promote(r, &d, progress)...)
+	effs = append(effs, b.handOver(d)...)
+	return r, append(effs, b.promote(r, d, progress)...)
 }
 
 // peer returns the progress of the member id, in a copy of the peers the

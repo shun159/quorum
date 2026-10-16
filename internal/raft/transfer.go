@@ -47,9 +47,9 @@ func TransferLeader(ctx context.Context, caller actor.Caller, group string, node
 
 // transferLeader starts handing the place of the leader to the voter on
 // node m.To.
-func (b behaviour[S, Cmd, Rep]) transferLeader(r role, d replica[S], c genstatem.Call, m transferLeader) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) transferLeader(r role, d *replica[S], c genstatem.Call, m transferLeader) (role, []actor.Effect) {
 	if r != leader {
-		return r, d, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
+		return r, actor.Do(c.Reply(redirect{Leader: d.leader.Node()}))
 	}
 	var to proc.PID
 	for _, id := range d.config.Voters {
@@ -59,15 +59,15 @@ func (b behaviour[S, Cmd, Rep]) transferLeader(r role, d replica[S], c genstatem
 	}
 	switch {
 	case to.IsZero():
-		return r, d, actor.Do(c.Reply(rejected{fmt.Sprintf("quorum: group %s has no voter on %s", b.spec.Group, m.To)}))
+		return r, actor.Do(c.Reply(rejected{fmt.Sprintf("quorum: group %s has no voter on %s", b.spec.Group, m.To)}))
 	case to == d.id:
-		return r, d, actor.Do(c.Reply(applied{}))
+		return r, actor.Do(c.Reply(applied{}))
 	case d.transfer != nil:
-		return r, d, actor.Do(c.Reply(busy{}))
+		return r, actor.Do(c.Reply(busy{}))
 	}
 	d.transfer = &transferring{to: to, from: c.From}
 	effs := actor.Do(genstatem.StartTimeout{Name: transferTimeout{}, After: b.spec.ElectionTimeout})
-	return r, d, append(effs, b.handOver(&d)...)
+	return r, append(effs, b.handOver(d)...)
 }
 
 // handOver tells the voter the leader hands over to that it may stand,
@@ -100,23 +100,23 @@ func (d *replica[S]) endTransfer(answer any) []actor.Effect {
 }
 
 // transferTimedOut gives up handing over: the leader takes commands again.
-func (b behaviour[S, Cmd, Rep]) transferTimedOut(r role, d replica[S]) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) transferTimedOut(r role, d *replica[S]) (role, []actor.Effect) {
 	if r != leader {
-		return r, d, nil
+		return r, nil
 	}
-	return r, d, d.endTransfer(rejected{fmt.Sprintf("quorum: group %s: no other took the lead in time", b.spec.Group)})
+	return r, d.endTransfer(rejected{fmt.Sprintf("quorum: group %s: no other took the lead in time", b.spec.Group)})
 }
 
 // timeoutNow has the member stand at once, its leader handing over to it.
-func (b behaviour[S, Cmd, Rep]) timeoutNow(r role, d replica[S], m timeoutNow) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) timeoutNow(r role, d *replica[S], m timeoutNow) (role, []actor.Effect) {
 	if r != follower || m.Term != d.term || m.Leader != d.leader || !d.config.isVoter(d.id) {
-		return r, d, nil
+		return r, nil
 	}
 	var effs []actor.Effect
 	if d.quiet {
 		d.quiet = false
 		effs = actor.Do(actor.Demonitor{Tag: watchLeader{}})
 	}
-	r, d, more := b.stand(d)
-	return r, d, append(effs, more...)
+	r, more := b.stand(d)
+	return r, append(effs, more...)
 }

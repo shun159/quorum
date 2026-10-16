@@ -44,21 +44,21 @@ func (d *replica[S]) mayQuiet() bool {
 // beat is the time for the leader to beat: it beats, unless it has had
 // nothing to do for Quiet, when it beats a last time, telling the others
 // it goes quiet.
-func (b behaviour[S, Cmd, Rep]) beat(d replica[S]) (replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) beat(d *replica[S]) []actor.Effect {
 	if !d.mayQuiet() || b.spec.Quiet < 0 {
 		d.idle = 0
-		return d, b.heartbeat(&d)
+		return b.heartbeat(d)
 	}
 	d.idle++
 	if time.Duration(d.idle)*b.spec.Heartbeat < b.spec.Quiet {
-		return d, b.heartbeat(&d)
+		return b.heartbeat(d)
 	}
 	d.quiet = true
 	effs := []actor.Effect{genstatem.CancelTimeout{Name: checkQuorum{}}}
 	for _, p := range d.peers {
-		effs = append(effs, b.appendTo(&d, p)...)
+		effs = append(effs, b.appendTo(d, p)...)
 	}
-	return d, effs
+	return effs
 }
 
 // wake has a quiet leader beat again, the others heard from as when it
@@ -108,20 +108,20 @@ func (d *replica[S]) wakeTimer(base time.Duration) actor.Effect {
 // nodeEvent notes a node falling silent or down, or heard or up again. A
 // quiet follower whose leader's node is lost stops following it; a quiet
 // leader that hears from no majority steps down.
-func (b behaviour[S, Cmd, Rep]) nodeEvent(r role, d replica[S], node string, lost bool) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) nodeEvent(r role, d *replica[S], node string, lost bool) (role, []actor.Effect) {
 	d.unheard = slices.DeleteFunc(slices.Clone(d.unheard), func(n string) bool { return n == node })
 	if !lost {
-		return r, d, nil
+		return r, nil
 	}
 	d.unheard = append(d.unheard, node)
 	switch {
 	case r == follower && d.quiet && d.leader.Node() == node:
-		return r, d, d.unhush(d.wakeTimer(b.spec.ElectionTimeout))
+		return r, d.unhush(d.wakeTimer(b.spec.ElectionTimeout))
 	case r == leader && d.quiet && d.hears() < d.config.majority():
 		d.quiet, d.leader = false, proc.PID{}
-		return follower, d, nil
+		return follower, nil
 	}
-	return r, d, nil
+	return r, nil
 }
 
 // hears counts the voters on nodes the member hears from, itself
@@ -139,11 +139,11 @@ func (d *replica[S]) hears() int {
 // leaderDown has a quiet follower whose leader died stop following it:
 // the process on the leader's node, the leader known by the PID it first
 // had.
-func (b behaviour[S, Cmd, Rep]) leaderDown(r role, d replica[S], m actor.Down) (role, replica[S], []actor.Effect) {
+func (b behaviour[S, Cmd, Rep]) leaderDown(r role, d *replica[S], m actor.Down) (role, []actor.Effect) {
 	if r != follower || !d.quiet || m.PID.Node() != d.leader.Node() {
-		return r, d, nil
+		return r, nil
 	}
-	return r, d, d.unhush(d.wakeTimer(b.spec.ElectionTimeout))
+	return r, d.unhush(d.wakeTimer(b.spec.ElectionTimeout))
 }
 
 // nodeLost reports whether msg tells of a node lost, or found again.
