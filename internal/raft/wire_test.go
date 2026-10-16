@@ -35,6 +35,14 @@ func TestWire(t *testing.T) {
 		installSnapshot{Term: 2, Leader: ida, To: idb, Index: 100, Size: 0},
 		snapshotAck{Term: 2, From: idb, Index: 100, Offset: 128},
 		timeoutNow{Term: 2, Leader: ida, To: idc},
+		command{Cmd: 1, From: Origin{Session: 3, Seq: 4, Acked: 2}},
+		command{Cmd: nil},
+		read{Cmd: "key"},
+		applied{Rep: int64(5)},
+		applied{},
+		redirect{Leader: "b@localhost"},
+		redirect{},
+		rejected{Reason: "no"},
 	}
 	for _, m := range msgs {
 		b, err := m.AppendBinary(nil)
