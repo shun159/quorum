@@ -1,9 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"os"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 	"os/exec"
 	"path/filepath"
 	"syscall"
@@ -21,12 +20,12 @@ type cluster struct {
 
 // startCluster starts count nodes, keeping their storage under dir.
 func startCluster(count int, dir string) (*cluster, error) {
-	c := &cluster{addrs: map[string]string{control: freeAddr()}, finds: map[string]map[string]string{}, dirs: map[string]string{},
+	c := &cluster{addrs: map[string]string{control: nodes.FreeAddr()}, finds: map[string]map[string]string{}, dirs: map[string]string{},
 		procs: map[string]*exec.Cmd{}, links: map[[2]string]*link{}}
 	for i := range count {
 		name := fmt.Sprintf("%c@localhost", 'a'+i)
 		c.names = append(c.names, name)
-		c.addrs[name] = freeAddr()
+		c.addrs[name] = nodes.FreeAddr()
 		c.dirs[name] = filepath.Join(dir, name)
 	}
 	for i, x := range c.names {
@@ -67,23 +66,11 @@ func (c *cluster) link(x, y string) *link {
 
 // start starts the node name, and returns once it is ready.
 func (c *cluster) start(name string) error {
-	self, err := os.Executable()
+	p, err := nodes.Start(name, c.finds[name], "-dir", c.dirs[name])
 	if err != nil {
-		return err
-	}
-	p := exec.Command(self, "-node", name, "-addrs", formatAddrs(c.finds[name]), "-dir", c.dirs[name])
-	p.Stderr = os.Stderr
-	out, err := p.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := p.Start(); err != nil {
 		return err
 	}
 	c.procs[name] = p
-	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "ready\n" {
-		return fmt.Errorf("%s: %q", name, line)
-	}
 	return nil
 }
 

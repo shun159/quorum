@@ -2,10 +2,7 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"net"
-	"strings"
 	"sync/atomic"
 
 	"github.com/shun159/molecule/actor"
@@ -14,6 +11,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 	"github.com/shun159/quorum/internal/register"
 )
 
@@ -26,7 +24,7 @@ const (
 // until killed. It finds the others where addrs says: through proxies.
 func runNode(name string, addrs map[string]string, dir string) {
 	n := proc.NewNode(name)
-	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: cookie, Resolve: resolver(addrs)}); err != nil {
+	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: cookie, Resolve: nodes.Resolver(addrs)}); err != nil {
 		log.Fatal(err)
 	}
 	spec := quorum.Spec[int, int, int]{Group: group, Machine: machine{}, Dir: dir, SnapshotEvery: 100}
@@ -41,7 +39,7 @@ func runNode(name string, addrs map[string]string, dir string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("ready")
+	nodes.Ready()
 	select {}
 }
 
@@ -71,34 +69,4 @@ func init() { dist.Register(leadsReq{}) }
 
 func (leading) HandleCall(s struct{}, _ leadsReq, from genserver.From[bool]) (struct{}, []actor.Effect) {
 	return s, actor.Do(from.Reply(leads.Load()))
-}
-
-func freeAddr() string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().String()
-}
-
-func resolver(addrs map[string]string) func(string) (string, bool) {
-	return func(node string) (string, bool) { a, ok := addrs[node]; return a, ok }
-}
-
-func parseAddrs(s string) map[string]string {
-	addrs := map[string]string{}
-	for _, pair := range strings.Split(s, ",") {
-		name, addr, _ := strings.Cut(pair, "=")
-		addrs[name] = addr
-	}
-	return addrs
-}
-
-func formatAddrs(addrs map[string]string) string {
-	var pairs []string
-	for name, addr := range addrs {
-		pairs = append(pairs, name+"="+addr)
-	}
-	return strings.Join(pairs, ",")
 }

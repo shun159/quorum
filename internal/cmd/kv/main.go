@@ -20,6 +20,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 )
 
 func main() {
@@ -32,7 +33,7 @@ func main() {
 	length := flag.Duration("time", 10*time.Second, "how long the clients write among the keys")
 	flag.Parse()
 	if *node != "" {
-		runNode(*node, parseAddrs(*addrs), *dir)
+		runNode(*node, nodes.Parse(*addrs), *dir)
 		return
 	}
 	if *dir == "" {
@@ -54,23 +55,43 @@ func measure(parent string, keys, value, clients int, length time.Duration) erro
 		return err
 	}
 	defer c.kill()
-	n := proc.NewNode(control)
-	d, err := dist.Start(n, dist.Config{Listen: c.addrs[control], Cookie: cookie, Resolve: resolver(c.addrs)})
+	n, d, err := join(c)
 	if err != nil {
 		return err
 	}
 	defer d.Stop()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	err = quorum.Found(ctx, n, group, names)
-	cancel()
-	if err != nil {
-		return err
-	}
 	val := make([]byte, value)
 	fmt.Printf("%d keys of %d bytes, %d clients at once\n", keys, value, clients)
+	if err := load(n, c, clients, sender{until: keys, val: val}); err != nil {
+		return err
+	}
+	if err := write(n, c, clients, length, sender{until: keys, random: true, end: time.Now().Add(length), val: val}); err != nil {
+		return err
+	}
+	return restart(n, c)
+}
 
+// join joins the nodes from a node of the measure's own, and founds the
+// group.
+func join(c *cluster) (*proc.Node, *dist.Dist, error) {
+	n := proc.NewNode(control)
+	d, err := dist.Start(n, dist.Config{Listen: c.addrs[control], Cookie: cookie, Resolve: nodes.Resolver(c.addrs)})
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := quorum.Found(ctx, n, group, names); err != nil {
+		d.Stop()
+		return nil, nil, err
+	}
+	return n, d, nil
+}
+
+// load puts each key once, the clients at once, and tells how fast.
+func load(n *proc.Node, c *cluster, clients int, s sender) error {
 	start := time.Now()
-	ss, err := startSenders(n, clients, sender{until: keys, val: val})
+	ss, err := startSenders(n, clients, s)
 	if err != nil {
 		return err
 	}
@@ -81,20 +102,30 @@ func measure(parent string, keys, value, clients int, length time.Duration) erro
 	took := time.Since(start)
 	fmt.Printf("loaded in %v: %.0f puts/s, %d failed; %s\n", took.Round(time.Millisecond), float64(len(lat))/took.Seconds(), failed, latencies(lat))
 	fmt.Printf("memory: %s\n", c.memory())
+	return nil
+}
 
-	ss, err = startSenders(n, clients, sender{until: keys, random: true, end: time.Now().Add(length), val: val})
+// write puts keys at random for length, the clients at once, and tells
+// how fast.
+func write(n *proc.Node, c *cluster, clients int, length time.Duration, s sender) error {
+	ss, err := startSenders(n, clients, s)
 	if err != nil {
 		return err
 	}
-	lat, failed, err = ss.wait(n)
+	lat, failed, err := ss.wait(n)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("writes among them: %.0f puts/s, %d failed; %s\n", float64(len(lat))/length.Seconds(), failed, latencies(lat))
 	fmt.Printf("memory: %s\n", c.memory())
+	return nil
+}
 
+// restart kills the nodes, starts them again, and tells how long until
+// they run and the group takes a put again.
+func restart(n *proc.Node, c *cluster) error {
 	c.kill()
-	start = time.Now()
+	start := time.Now()
 	if err := c.start(); err != nil {
 		return err
 	}

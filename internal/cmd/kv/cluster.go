@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +13,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 )
 
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
@@ -33,33 +32,21 @@ type cluster struct {
 }
 
 func startCluster(dir string) (*cluster, error) {
-	c := &cluster{dir: dir, addrs: map[string]string{control: freeAddr()}, procs: map[string]*exec.Cmd{}}
+	c := &cluster{dir: dir, addrs: map[string]string{control: nodes.FreeAddr()}, procs: map[string]*exec.Cmd{}}
 	for _, name := range names {
-		c.addrs[name] = freeAddr()
+		c.addrs[name] = nodes.FreeAddr()
 	}
 	return c, c.start()
 }
 
 // start starts the nodes, and returns once they are ready.
 func (c *cluster) start() error {
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	for _, name := range names {
-		p := exec.Command(self, "-node", name, "-addrs", formatAddrs(c.addrs), "-dir", filepath.Join(c.dir, name))
-		p.Stderr = os.Stderr
-		out, err := p.StdoutPipe()
+		p, err := nodes.Start(name, c.addrs, "-dir", filepath.Join(c.dir, name))
 		if err != nil {
 			return err
 		}
-		if err := p.Start(); err != nil {
-			return err
-		}
 		c.procs[name] = p
-		if line, _ := bufio.NewReader(out).ReadString('\n'); line != "ready\n" {
-			return fmt.Errorf("%s: %q", name, line)
-		}
 	}
 	return nil
 }
@@ -93,7 +80,7 @@ func (c *cluster) memory() string {
 // the group, until killed.
 func runNode(name string, addrs map[string]string, dir string) {
 	n := proc.NewNode(name)
-	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: cookie, Resolve: resolver(addrs)}); err != nil {
+	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: cookie, Resolve: nodes.Resolver(addrs)}); err != nil {
 		log.Fatal(err)
 	}
 	spec := quorum.Spec[state, Put, int]{Group: group, Machine: kv{}, Dir: dir}
@@ -107,36 +94,6 @@ func runNode(name string, addrs map[string]string, dir string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("ready")
+	nodes.Ready()
 	select {}
-}
-
-func freeAddr() string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().String()
-}
-
-func resolver(addrs map[string]string) func(string) (string, bool) {
-	return func(node string) (string, bool) { a, ok := addrs[node]; return a, ok }
-}
-
-func parseAddrs(s string) map[string]string {
-	addrs := map[string]string{}
-	for _, pair := range strings.Split(s, ",") {
-		name, addr, _ := strings.Cut(pair, "=")
-		addrs[name] = addr
-	}
-	return addrs
-}
-
-func formatAddrs(addrs map[string]string) string {
-	var pairs []string
-	for name, addr := range addrs {
-		pairs = append(pairs, name+"="+addr)
-	}
-	return strings.Join(pairs, ",")
 }

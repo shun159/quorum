@@ -81,26 +81,38 @@ func (l *link) copy(dst, src net.Conn) {
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := src.Read(buf)
-		if n > 0 {
-			if !l.wait() {
-				break
-			}
-			if _, err := dst.Write(buf[:n]); err != nil {
-				break
-			}
+		if n > 0 && !l.forward(dst, buf[:n]) {
+			break
+		}
+		if err == io.EOF && closeWrite(dst) {
+			return
 		}
 		if err != nil {
-			if err == io.EOF {
-				if c, ok := dst.(*net.TCPConn); ok {
-					c.CloseWrite()
-					return
-				}
-			}
 			break
 		}
 	}
 	src.Close()
 	dst.Close()
+}
+
+// forward writes b to dst once the link carries, and reports whether it
+// did.
+func (l *link) forward(dst net.Conn, b []byte) bool {
+	if !l.wait() {
+		return false
+	}
+	_, err := dst.Write(b)
+	return err == nil
+}
+
+// closeWrite closes the writing half of dst, if a TCP connection, for the
+// end to reach the other side, and reports whether it did.
+func closeWrite(dst net.Conn) bool {
+	c, ok := dst.(*net.TCPConn)
+	if ok {
+		c.CloseWrite()
+	}
+	return ok
 }
 
 // wait waits while the link is silent, and reports whether it carries.

@@ -11,17 +11,13 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
-	"net"
-	"os"
 	"os/exec"
 	"slices"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -32,6 +28,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 )
 
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
@@ -45,7 +42,7 @@ func main() {
 	how := flag.String("how", "stop", "how the node is lost: stop, frozen by SIGSTOP; kill, by SIGKILL")
 	flag.Parse()
 	if *node != "" {
-		runNode(*node, parseAddrs(*addrs), *groups, *quiet, *silent)
+		runNode(*node, nodes.Parse(*addrs), *groups, *quiet, *silent)
 		return
 	}
 	if err := measure(*groups, *quiet, *silent, *how); err != nil {
@@ -58,76 +55,106 @@ func main() {
 func measure(groups int, quiet, silent time.Duration, how string) error {
 	addrs := map[string]string{}
 	for _, name := range append(slices.Clone(names), "measure@localhost") {
-		addrs[name] = freeAddr()
+		addrs[name] = nodes.FreeAddr()
 	}
-	var procs []*exec.Cmd
-	defer func() {
-		for _, p := range procs {
-			p.Process.Signal(syscall.SIGCONT)
-			p.Process.Kill()
-			p.Wait()
-		}
-	}()
-	self, err := os.Executable()
+	procs, err := startNodes(addrs, groups, quiet, silent)
+	defer kill(procs)
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
-		p := exec.Command(self, "-node", name, "-addrs", formatAddrs(addrs),
-			"-groups", fmt.Sprint(groups), "-quiet", quiet.String(), "-silent", silent.String())
-		p.Stderr = os.Stderr
-		out, err := p.StdoutPipe()
-		if err != nil {
-			return err
-		}
-		if err := p.Start(); err != nil {
-			return err
-		}
-		procs = append(procs, p)
-		if line, _ := bufio.NewReader(out).ReadString('\n'); line != "ready\n" {
-			return fmt.Errorf("%s: %q", name, line)
-		}
-	}
-
-	n := proc.NewNode("measure@localhost")
-	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "failover", Resolve: resolver(addrs), Silent: silent})
+	n, d, err := join(addrs, groups, silent)
 	if err != nil {
 		return err
 	}
 	defer d.Stop()
-	if err := found(n, groups); err != nil {
+	time.Sleep(3 * time.Second) // to go quiet
+	led, err := leadersOf(n)
+	if err != nil {
 		return err
 	}
-	time.Sleep(3 * time.Second) // to go quiet
+	lost := slices.MaxFunc(names, func(x, y string) int { return len(led[x]) - len(led[y]) })
+	fmt.Printf("%d groups, quiet %v, silent %v: %s leads %d, lost by %s\n", groups, quiet, cmpOr(silent, dist.DefaultSilent), lost, len(led[lost]), how)
+	report(lose(n, procs[slices.Index(names, lost)], lost, led[lost], how))
+	return nil
+}
 
+// report tells the least, median, 90th percentile and most of took.
+func report(took []time.Duration) {
+	slices.Sort(took)
+	least, median, p90, most := took[0], took[len(took)/2], took[len(took)*9/10], took[len(took)-1]
+	fmt.Printf("took: min %v, median %v, p90 %v, max %v\n", ms(least), ms(median), ms(p90), ms(most))
+}
+
+// startNodes starts the three nodes, with the groups, quiet and silent as
+// given.
+func startNodes(addrs map[string]string, groups int, quiet, silent time.Duration) ([]*exec.Cmd, error) {
+	var procs []*exec.Cmd
+	for _, name := range names {
+		p, err := nodes.Start(name, addrs,
+			"-groups", fmt.Sprint(groups), "-quiet", quiet.String(), "-silent", silent.String())
+		if err != nil {
+			return procs, err
+		}
+		procs = append(procs, p)
+	}
+	return procs, nil
+}
+
+// kill kills the nodes, those stopped too.
+func kill(procs []*exec.Cmd) {
+	for _, p := range procs {
+		p.Process.Signal(syscall.SIGCONT)
+		p.Process.Kill()
+		p.Wait()
+	}
+}
+
+// join joins the nodes from a node of the measure's own, and founds the
+// groups.
+func join(addrs map[string]string, groups int, silent time.Duration) (*proc.Node, *dist.Dist, error) {
+	n := proc.NewNode("measure@localhost")
+	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "failover", Resolve: nodes.Resolver(addrs), Silent: silent})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := found(n, groups); err != nil {
+		d.Stop()
+		return nil, nil, err
+	}
+	return n, d, nil
+}
+
+// leadersOf returns the groups each node leads.
+func leadersOf(n *proc.Node) (map[string][]string, error) {
 	led := map[string][]string{}
 	for _, name := range names {
 		v, err := genserver.NewRef[leadersReq, leaders, genserver.None](actor.Remote{Node: name, Name: "leaders"}).Call(context.Background(), n, leadersReq{})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		led[name] = v.Groups
 	}
-	lost := slices.MaxFunc(names, func(x, y string) int { return len(led[x]) - len(led[y]) })
-	others := slices.DeleteFunc(slices.Clone(names), func(s string) bool { return s == lost })
-	fmt.Printf("%d groups, quiet %v, silent %v: %s leads %d, lost by %s\n", groups, quiet, cmpOr(silent, dist.DefaultSilent), lost, len(led[lost]), how)
+	return led, nil
+}
 
+// lose loses the node lost, of process p, stopped or killed as how says,
+// and returns how long each group it led took to take a command again,
+// through the others.
+func lose(n *proc.Node, p *exec.Cmd, lost string, groups []string, how string) []time.Duration {
+	others := slices.DeleteFunc(slices.Clone(names), func(s string) bool { return s == lost })
 	sig := syscall.SIGSTOP
 	if how == "kill" {
 		sig = syscall.SIGKILL
 	}
 	start := time.Now()
-	procs[slices.Index(names, lost)].Process.Signal(sig)
-	took := make([]time.Duration, len(led[lost]))
+	p.Process.Signal(sig)
+	took := make([]time.Duration, len(groups))
 	var wg sync.WaitGroup
-	for i, g := range led[lost] {
+	for i, g := range groups {
 		wg.Go(func() { took[i] = commandAgain(n, g, others, start) })
 	}
 	wg.Wait()
-	slices.Sort(took)
-	fmt.Printf("took: min %v, median %v, p90 %v, max %v\n",
-		ms(took[0]), ms(took[len(took)/2]), ms(took[len(took)*9/10]), ms(took[len(took)-1]))
-	return nil
+	return took
 }
 
 // commandAgain sends a command to group through others until one is
@@ -171,7 +198,7 @@ func found(n *proc.Node, groups int) error {
 // killed.
 func runNode(name string, addrs map[string]string, groups int, quiet, silent time.Duration) {
 	n := proc.NewNode(name)
-	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "failover", Resolve: resolver(addrs), Silent: silent}); err != nil {
+	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "failover", Resolve: nodes.Resolver(addrs), Silent: silent}); err != nil {
 		log.Fatal(err)
 	}
 	children := []supervisor.ChildSpec{{ID: "leaders", Start: genserver.Child(leading{}, actor.WithName(actor.Local("leaders")))}}
@@ -182,7 +209,7 @@ func runNode(name string, addrs map[string]string, groups int, quiet, silent tim
 	if _, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForOne, Children: children}); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("ready")
+	nodes.Ready()
 	select {}
 }
 
@@ -225,36 +252,6 @@ func (leading) HandleCall(s struct{}, _ leadersReq, from genserver.From[leaders]
 		return true
 	})
 	return s, actor.Do(from.Reply(l))
-}
-
-func freeAddr() string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().String()
-}
-
-func resolver(addrs map[string]string) func(string) (string, bool) {
-	return func(node string) (string, bool) { a, ok := addrs[node]; return a, ok }
-}
-
-func parseAddrs(s string) map[string]string {
-	addrs := map[string]string{}
-	for _, pair := range strings.Split(s, ",") {
-		name, addr, _ := strings.Cut(pair, "=")
-		addrs[name] = addr
-	}
-	return addrs
-}
-
-func formatAddrs(addrs map[string]string) string {
-	var pairs []string
-	for name, addr := range addrs {
-		pairs = append(pairs, name+"="+addr)
-	}
-	return strings.Join(pairs, ",")
 }
 
 func ms(d time.Duration) string { return d.Round(time.Millisecond).String() }
