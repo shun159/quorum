@@ -89,21 +89,31 @@ func (b behaviour[S, Cmd, Rep]) change(r role, d *replica[S], c genstatem.Call, 
 		return r, actor.Do(c.Reply(busy{}))
 	}
 	config, err := b.changed(d.config, m)
-	add, adding := m.(addMember)
-	switch {
-	case err != nil:
+	if err != nil {
 		return r, actor.Do(c.Reply(rejected{err.Error()}))
-	case adding:
-		d.rarely().joining = append(d.rarely().joining, joining{id: add.ID, from: c.From})
-	case sameConfig(config, d.config):
-		return r, actor.Do(c.Reply(applied{}))
-	default:
-		d.pending = append(d.pending, pending{index: d.log.lastIndex() + 1, from: c.From})
+	}
+	if reply, now := d.awaitChange(c, m, config); now {
+		return r, reply
 	}
 	if sameConfig(config, d.config) {
 		return r, d.joined() // added already
 	}
 	return r, b.appendConfig(r, d, config)
+}
+
+// awaitChange notes whom to reply to about the change m, called by c, to
+// config: of an addition once the member is a voter, of another change
+// once committed; or, if it changes nothing, returns the reply, now.
+func (d *replica[S]) awaitChange(c genstatem.Call, m any, config Config) (reply []actor.Effect, now bool) {
+	if add, adding := m.(addMember); adding {
+		d.rarely().joining = append(d.rarely().joining, joining{id: add.ID, from: c.From})
+		return nil, false
+	}
+	if sameConfig(config, d.config) {
+		return actor.Do(c.Reply(applied{})), true
+	}
+	d.pending = append(d.pending, pending{index: d.log.lastIndex() + 1, from: c.From})
+	return nil, false
 }
 
 // joined replies to the additions of members now voters by the

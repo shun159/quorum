@@ -136,18 +136,9 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 		rare:  &rare{votedFor: saved.State.VotedFor},
 	}
 	if saved.Snapshot.Index > 0 {
-		snap, err := b.decode(saved.Snapshot.Encoded)
-		if err != nil {
-			return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s cannot decode its snapshot: %w", b.spec.Group, err)
+		if err := b.restore(&d, saved); err != nil {
+			return follower, replica[S]{}, nil, err
 		}
-		state, ok := snap.State.(S)
-		if !ok {
-			return follower, replica[S]{}, nil, fmt.Errorf("quorum: group %s saved a snapshot of a %T", b.spec.Group, snap.State)
-		}
-		d.rarely().snapshot = snap
-		d.state, d.sessions = state, snap.Sessions
-		d.log = raftLog{start: snap.Index, startTerm: snap.Term, startConfig: snap.Config, entries: saved.Log}
-		d.commit, d.applied = snap.Index, snap.Index
 	}
 	d.logChanged(0)
 	d.stable = d.log.lastIndex()
@@ -157,6 +148,24 @@ func (b behaviour[S, Cmd, Rep]) Init(self proc.PID) (role, replica[S], []actor.E
 	}
 	d.id = self
 	return follower, d, append(effs, b.saveState(&d)...), nil
+}
+
+// restore restores d from the snapshot saved, its log the entries saved
+// after it.
+func (b behaviour[S, Cmd, Rep]) restore(d *replica[S], saved Saved) error {
+	snap, err := b.decode(saved.Snapshot.Encoded)
+	if err != nil {
+		return fmt.Errorf("quorum: group %s cannot decode its snapshot: %w", b.spec.Group, err)
+	}
+	state, ok := snap.State.(S)
+	if !ok {
+		return fmt.Errorf("quorum: group %s saved a snapshot of a %T", b.spec.Group, snap.State)
+	}
+	d.rarely().snapshot = snap
+	d.state, d.sessions = state, snap.Sessions
+	d.log = raftLog{start: snap.Index, startTerm: snap.Term, startConfig: snap.Config, entries: saved.Log}
+	d.commit, d.applied = snap.Index, snap.Index
+	return nil
 }
 
 // seed seeds the election timeouts of the member of group in process
