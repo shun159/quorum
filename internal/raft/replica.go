@@ -219,18 +219,24 @@ func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d *replica[S], ev genstatem.
 	case genstatem.Call:
 		return b.call(r, d, e)
 	case genstatem.Info:
-		if tag, err, ok := b.isDurable(e.Msg); ok {
-			return b.durable(r, d, tag, err)
-		}
-		if node, lost, ok := nodeLost(e.Msg); ok {
-			return b.nodeEvent(r, d, node, lost)
-		}
-		if m, ok := e.Msg.(actor.Down); ok && m.Tag == (watchLeader{}) {
-			return b.leaderDown(r, d, m)
-		}
-		return b.message(r, d, e.Msg)
+		return b.info(r, d, e.Msg)
 	}
 	return r, nil
+}
+
+// info handles a message not called: a save made durable, a node lost or
+// heard again, the leader's process down, or a message of a member.
+func (b behaviour[S, Cmd, Rep]) info(r role, d *replica[S], msg any) (role, []actor.Effect) {
+	if tag, err, ok := b.isDurable(msg); ok {
+		return b.durable(r, d, tag, err)
+	}
+	if node, lost, ok := nodeLost(msg); ok {
+		return b.nodeEvent(r, d, node, lost)
+	}
+	if m, ok := msg.(actor.Down); ok && m.Tag == (watchLeader{}) {
+		return b.leaderDown(r, d, m)
+	}
+	return b.message(r, d, msg)
 }
 
 // enter runs on every change of role, and on starting, as a follower.
