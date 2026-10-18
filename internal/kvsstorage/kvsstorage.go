@@ -114,25 +114,43 @@ func (s storage) Load() (raft.Saved, error) {
 	}
 	var saved raft.Saved
 	for k, r := range t.Range(s.key(KindState, 0), s.end()) {
-		switch {
-		case k.Kind == KindState:
-			saved.State = r.State
-		case k.Kind == KindSnapshot:
-			removeTemps(s.snapshotDir(t))
-			enc, err := readSnapshot(s.snapshotDir(t), r.Snapshot)
-			if err != nil {
-				return raft.Saved{}, fmt.Errorf("kvsstorage: group %s cannot read its snapshot: %w", s.group, err)
-			}
-			saved.Snapshot = raft.SavedSnapshot{Index: r.Snapshot, Encoded: enc}
-		case k.Index <= saved.Snapshot.Index:
-		case k.Index == saved.Snapshot.Index+uint64(len(saved.Log))+1:
-			saved.Log = append(saved.Log, r.Entry)
-		default:
-			return raft.Saved{}, fmt.Errorf("kvsstorage: group %s has entry %d after %d",
-				s.group, k.Index, saved.Snapshot.Index+uint64(len(saved.Log)))
+		if err := s.loadRecord(t, &saved, k, r); err != nil {
+			return raft.Saved{}, err
 		}
 	}
 	return saved, nil
+}
+
+// loadRecord adds the record r of key k, of the table t, to what is saved:
+// the state, the snapshot, or the next entry of the log, those the
+// snapshot holds skipped.
+func (s storage) loadRecord(t *Table, saved *raft.Saved, k Key, r Record) error {
+	last := saved.Snapshot.Index + uint64(len(saved.Log))
+	switch {
+	case k.Kind == KindState:
+		saved.State = r.State
+	case k.Kind == KindSnapshot:
+		snap, err := s.loadSnapshot(t, r.Snapshot)
+		saved.Snapshot = snap
+		return err
+	case k.Index <= saved.Snapshot.Index:
+	case k.Index == last+1:
+		saved.Log = append(saved.Log, r.Entry)
+	default:
+		return fmt.Errorf("kvsstorage: group %s has entry %d after %d", s.group, k.Index, last)
+	}
+	return nil
+}
+
+// loadSnapshot reads the snapshot of index, of the table t, from its file,
+// and removes the files of snapshots left half written.
+func (s storage) loadSnapshot(t *Table, index uint64) (raft.SavedSnapshot, error) {
+	removeTemps(s.snapshotDir(t))
+	enc, err := readSnapshot(s.snapshotDir(t), index)
+	if err != nil {
+		return raft.SavedSnapshot{}, fmt.Errorf("kvsstorage: group %s cannot read its snapshot: %w", s.group, err)
+	}
+	return raft.SavedSnapshot{Index: index, Encoded: enc}, nil
 }
 
 func (s storage) SaveState(st raft.State, tag any) actor.Effect {
