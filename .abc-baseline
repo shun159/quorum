@@ -1,0 +1,29 @@
+# The size of each function over a limit, or left out by its directive,
+# which it may not pass:
+# see github.com/shun159/abc. Rewritten with -write.
+17.1 examples/locks console.groups
+17.6 examples/locks main
+22.3 examples/pubsub console.run
+18.5 examples/pubsub machine.Read
+12.4 examples/pubsub machine.Read case Fetch
+19.2 examples/pubsub main
+21 examples/pubsub subscriber.HandleInfo
+45.5 internal/cmd/failover measure
+10.8 internal/cmd/failover measure cyclo
+49.9 internal/cmd/failover measure lines
+27.8 internal/cmd/kv measure
+4 internal/cmd/linearizable link.copy nesting
+39.8 internal/cmd/snapshot measure
+10.7 internal/cmd/snapshot measure cyclo
+49.8 internal/cmd/snapshot measure lines
+47.8 internal/cmd/throughput measure
+11.8 internal/cmd/throughput measure cyclo
+51.6 internal/cmd/throughput measure lines
+17.7 internal/cmd/throughput runNode
+18.5 internal/kvsstorage storage.Load
+17.8 internal/kvsstorage storage.saveSnapshot
+21.3 internal/raft behaviour.Init
+20.6 internal/raft behaviour.appendEntries
+19.1 internal/raft behaviour.appendReply
+17.7 internal/raft behaviour.change
+11.2 internal/raft behaviour.handleEvent case genstatem.Info

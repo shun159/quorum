@@ -214,6 +214,8 @@ func (b behaviour[S, Cmd, Rep]) serve(r role, d *replica[S], c genstatem.Call) (
 
 // command handles a command. The leader appends it, and replies once it is
 // applied; another member tells where the leader is.
+//
+//abc:hot BenchmarkLeader
 func (b behaviour[S, Cmd, Rep]) command(r role, d *replica[S], c genstatem.Call, m command) (role, []actor.Effect) {
 	if _, ok := m.Cmd.(Cmd); !ok {
 		var want Cmd

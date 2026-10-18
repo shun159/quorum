@@ -202,6 +202,7 @@ func (d *replica[S]) logChanged(from uint64) {
 	}
 }
 
+//abc:hot BenchmarkLeader,BenchmarkFollower
 func (b behaviour[S, Cmd, Rep]) handleEvent(r role, d *replica[S], ev genstatem.Event) (role, []actor.Effect) {
 	switch e := ev.(type) {
 	case genstatem.Enter[role]:
