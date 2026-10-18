@@ -11,17 +11,13 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
-	"net"
-	"os"
 	"os/exec"
 	"slices"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -32,6 +28,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 )
 
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
@@ -45,7 +42,7 @@ func main() {
 	how := flag.String("how", "stop", "how the node is lost: stop, frozen by SIGSTOP; kill, by SIGKILL")
 	flag.Parse()
 	if *node != "" {
-		runNode(*node, parseAddrs(*addrs), *groups, *quiet, *silent)
+		runNode(*node, nodes.Parse(*addrs), *groups, *quiet, *silent)
 		return
 	}
 	if err := measure(*groups, *quiet, *silent, *how); err != nil {
@@ -58,7 +55,7 @@ func main() {
 func measure(groups int, quiet, silent time.Duration, how string) error {
 	addrs := map[string]string{}
 	for _, name := range append(slices.Clone(names), "measure@localhost") {
-		addrs[name] = freeAddr()
+		addrs[name] = nodes.FreeAddr()
 	}
 	var procs []*exec.Cmd
 	defer func() {
@@ -68,29 +65,17 @@ func measure(groups int, quiet, silent time.Duration, how string) error {
 			p.Wait()
 		}
 	}()
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	for _, name := range names {
-		p := exec.Command(self, "-node", name, "-addrs", formatAddrs(addrs),
+		p, err := nodes.Start(name, addrs,
 			"-groups", fmt.Sprint(groups), "-quiet", quiet.String(), "-silent", silent.String())
-		p.Stderr = os.Stderr
-		out, err := p.StdoutPipe()
 		if err != nil {
 			return err
 		}
-		if err := p.Start(); err != nil {
-			return err
-		}
 		procs = append(procs, p)
-		if line, _ := bufio.NewReader(out).ReadString('\n'); line != "ready\n" {
-			return fmt.Errorf("%s: %q", name, line)
-		}
 	}
 
 	n := proc.NewNode("measure@localhost")
-	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "failover", Resolve: resolver(addrs), Silent: silent})
+	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "failover", Resolve: nodes.Resolver(addrs), Silent: silent})
 	if err != nil {
 		return err
 	}
@@ -171,7 +156,7 @@ func found(n *proc.Node, groups int) error {
 // killed.
 func runNode(name string, addrs map[string]string, groups int, quiet, silent time.Duration) {
 	n := proc.NewNode(name)
-	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "failover", Resolve: resolver(addrs), Silent: silent}); err != nil {
+	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "failover", Resolve: nodes.Resolver(addrs), Silent: silent}); err != nil {
 		log.Fatal(err)
 	}
 	children := []supervisor.ChildSpec{{ID: "leaders", Start: genserver.Child(leading{}, actor.WithName(actor.Local("leaders")))}}
@@ -182,7 +167,7 @@ func runNode(name string, addrs map[string]string, groups int, quiet, silent tim
 	if _, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForOne, Children: children}); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("ready")
+	nodes.Ready()
 	select {}
 }
 
@@ -225,36 +210,6 @@ func (leading) HandleCall(s struct{}, _ leadersReq, from genserver.From[leaders]
 		return true
 	})
 	return s, actor.Do(from.Reply(l))
-}
-
-func freeAddr() string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().String()
-}
-
-func resolver(addrs map[string]string) func(string) (string, bool) {
-	return func(node string) (string, bool) { a, ok := addrs[node]; return a, ok }
-}
-
-func parseAddrs(s string) map[string]string {
-	addrs := map[string]string{}
-	for _, pair := range strings.Split(s, ",") {
-		name, addr, _ := strings.Cut(pair, "=")
-		addrs[name] = addr
-	}
-	return addrs
-}
-
-func formatAddrs(addrs map[string]string) string {
-	var pairs []string
-	for name, addr := range addrs {
-		pairs = append(pairs, name+"="+addr)
-	}
-	return strings.Join(pairs, ",")
 }
 
 func ms(d time.Duration) string { return d.Round(time.Millisecond).String() }

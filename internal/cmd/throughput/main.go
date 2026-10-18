@@ -9,12 +9,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +28,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 )
 
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
@@ -43,7 +42,7 @@ func main() {
 	dir := flag.String("dir", "", "keep the storage of the nodes under dir, on disk; none if empty")
 	flag.Parse()
 	if *node != "" {
-		runNode(*node, parseAddrs(*addrs), *groups, *dir)
+		runNode(*node, nodes.Parse(*addrs), *groups, *dir)
 		return
 	}
 	if err := measure(*groups, *clients, *length, *dir); err != nil {
@@ -63,7 +62,7 @@ func measure(groups, clients int, length time.Duration, dir string) error {
 	}
 	addrs := map[string]string{}
 	for _, name := range append(slices.Clone(names), "measure@localhost") {
-		addrs[name] = freeAddr()
+		addrs[name] = nodes.FreeAddr()
 	}
 	procs := map[string]*exec.Cmd{}
 	defer func() {
@@ -72,32 +71,20 @@ func measure(groups, clients int, length time.Duration, dir string) error {
 			p.Wait()
 		}
 	}()
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	for _, name := range names {
 		nodeDir := ""
 		if dir != "" {
 			nodeDir = filepath.Join(dir, name)
 		}
-		p := exec.Command(self, "-node", name, "-addrs", formatAddrs(addrs), "-groups", fmt.Sprint(groups), "-dir", nodeDir)
-		p.Stderr = os.Stderr
-		out, err := p.StdoutPipe()
+		p, err := nodes.Start(name, addrs, "-groups", fmt.Sprint(groups), "-dir", nodeDir)
 		if err != nil {
 			return err
 		}
-		if err := p.Start(); err != nil {
-			return err
-		}
 		procs[name] = p
-		if line, _ := bufio.NewReader(out).ReadString('\n'); line != "ready\n" {
-			return fmt.Errorf("%s: %q", name, line)
-		}
 	}
 
 	n := proc.NewNode("measure@localhost")
-	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "throughput", Resolve: resolver(addrs)})
+	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "throughput", Resolve: nodes.Resolver(addrs)})
 	if err != nil {
 		return err
 	}
@@ -197,7 +184,7 @@ func electionsOf(n *proc.Node) int64 {
 // killed: its storage in dir, if not empty.
 func runNode(name string, addrs map[string]string, groups int, dir string) {
 	n := proc.NewNode(name)
-	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "throughput", Resolve: resolver(addrs)}); err != nil {
+	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "throughput", Resolve: nodes.Resolver(addrs)}); err != nil {
 		log.Fatal(err)
 	}
 	var members []supervisor.ChildSpec
@@ -213,7 +200,7 @@ func runNode(name string, addrs map[string]string, groups int, dir string) {
 	if _, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForAll, Children: children}); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("ready")
+	nodes.Ready()
 	select {}
 }
 
@@ -245,36 +232,6 @@ func init() { dist.Register(electionsReq{}) }
 
 func (counting) HandleCall(s struct{}, _ electionsReq, from genserver.From[int64]) (struct{}, []actor.Effect) {
 	return s, actor.Do(from.Reply(elections.Load()))
-}
-
-func freeAddr() string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().String()
-}
-
-func resolver(addrs map[string]string) func(string) (string, bool) {
-	return func(node string) (string, bool) { a, ok := addrs[node]; return a, ok }
-}
-
-func parseAddrs(s string) map[string]string {
-	addrs := map[string]string{}
-	for _, pair := range strings.Split(s, ",") {
-		name, addr, _ := strings.Cut(pair, "=")
-		addrs[name] = addr
-	}
-	return addrs
-}
-
-func formatAddrs(addrs map[string]string) string {
-	var pairs []string
-	for name, addr := range addrs {
-		pairs = append(pairs, name+"="+addr)
-	}
-	return strings.Join(pairs, ",")
 }
 
 func us(d time.Duration) string { return d.Round(10 * time.Microsecond).String() }

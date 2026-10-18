@@ -23,6 +23,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 	"github.com/shun159/quorum/internal/register"
 )
 
@@ -32,17 +33,17 @@ func main() {
 	node := flag.String("node", "", "run as this node, for the check")
 	addrs := flag.String("addrs", "", "where the node finds the others, as name=address, comma separated, for -node")
 	dir := flag.String("dir", "", "the storage of the node, for -node")
-	nodes := flag.Int("nodes", 3, "how many nodes")
+	count := flag.Int("nodes", 3, "how many nodes")
 	users := flag.Int("users", 5, "how many users")
 	timeout := flag.Duration("timeout", time.Second, "how long a user waits on a member before it asks another")
 	length := flag.Duration("time", 30*time.Second, "how long the nemesis disturbs")
 	seed := flag.Uint64("seed", uint64(time.Now().UnixNano()), "the seed of the nemesis' choices")
 	flag.Parse()
 	if *node != "" {
-		runNode(*node, parseAddrs(*addrs), *dir)
+		runNode(*node, nodes.Parse(*addrs), *dir)
 		return
 	}
-	if err := check(*nodes, *users, *timeout, *length, *seed); err != nil {
+	if err := check(*count, *users, *timeout, *length, *seed); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -62,7 +63,7 @@ func check(count, users int, timeout, length time.Duration, seed uint64) error {
 	defer c.stop()
 
 	n := proc.NewNode(control)
-	d, err := dist.Start(n, dist.Config{Listen: c.addrs[control], Cookie: cookie, Resolve: resolver(c.addrs)})
+	d, err := dist.Start(n, dist.Config{Listen: c.addrs[control], Cookie: cookie, Resolve: nodes.Resolver(c.addrs)})
 	if err != nil {
 		return err
 	}

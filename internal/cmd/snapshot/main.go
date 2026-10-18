@@ -12,12 +12,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"slices"
@@ -32,6 +30,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 )
 
 var names = []string{"a@localhost", "b@localhost", "c@localhost"}
@@ -49,7 +48,7 @@ func main() {
 	maxFrame := flag.Int("maxframe", 0, "dist.Config.MaxFrame of the nodes, in MB: zero, none")
 	flag.Parse()
 	if *node != "" {
-		runNode(*node, parseAddrs(*addrs), *groups, *maxFrame<<20)
+		runNode(*node, nodes.Parse(*addrs), *groups, *maxFrame<<20)
 		return
 	}
 	if err := measure(*groups, *size, *maxFrame); err != nil {
@@ -62,7 +61,7 @@ func main() {
 func measure(groups, size, maxFrame int) error {
 	addrs := map[string]string{}
 	for _, name := range append(slices.Clone(names), "measure@localhost") {
-		addrs[name] = freeAddr()
+		addrs[name] = nodes.FreeAddr()
 	}
 	procs := map[string]*exec.Cmd{}
 	defer func() {
@@ -71,29 +70,17 @@ func measure(groups, size, maxFrame int) error {
 			p.Wait()
 		}
 	}()
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	for _, name := range names {
-		p := exec.Command(self, "-node", name, "-addrs", formatAddrs(addrs),
+		p, err := nodes.Start(name, addrs,
 			"-groups", fmt.Sprint(groups), "-maxframe", fmt.Sprint(maxFrame))
-		p.Stderr = os.Stderr
-		out, err := p.StdoutPipe()
 		if err != nil {
 			return err
 		}
-		if err := p.Start(); err != nil {
-			return err
-		}
 		procs[name] = p
-		if line, _ := bufio.NewReader(out).ReadString('\n'); line != "ready\n" {
-			return fmt.Errorf("%s: %q", name, line)
-		}
 	}
 
 	n := proc.NewNode("measure@localhost")
-	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "snapshot", Resolve: resolver(addrs), MaxFrame: maxFrame << 20})
+	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "snapshot", Resolve: nodes.Resolver(addrs), MaxFrame: maxFrame << 20})
 	if err != nil {
 		return err
 	}
@@ -251,7 +238,7 @@ func memory(pid int) string {
 // killed.
 func runNode(name string, addrs map[string]string, groups, maxFrame int) {
 	n := proc.NewNode(name)
-	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "snapshot", Resolve: resolver(addrs), MaxFrame: maxFrame}); err != nil {
+	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "snapshot", Resolve: nodes.Resolver(addrs), MaxFrame: maxFrame}); err != nil {
 		log.Fatal(err)
 	}
 	children := []supervisor.ChildSpec{
@@ -265,7 +252,7 @@ func runNode(name string, addrs map[string]string, groups, maxFrame int) {
 	if _, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForOne, Children: children}); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("ready")
+	nodes.Ready()
 	select {}
 }
 
@@ -346,36 +333,6 @@ func (leading) HandleCall(s struct{}, _ leadersReq, from genserver.From[leaders]
 		return true
 	})
 	return s, actor.Do(from.Reply(l))
-}
-
-func freeAddr() string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer ln.Close()
-	return ln.Addr().String()
-}
-
-func resolver(addrs map[string]string) func(string) (string, bool) {
-	return func(node string) (string, bool) { a, ok := addrs[node]; return a, ok }
-}
-
-func parseAddrs(s string) map[string]string {
-	addrs := map[string]string{}
-	for _, pair := range strings.Split(s, ",") {
-		name, addr, _ := strings.Cut(pair, "=")
-		addrs[name] = addr
-	}
-	return addrs
-}
-
-func formatAddrs(addrs map[string]string) string {
-	var pairs []string
-	for name, addr := range addrs {
-		pairs = append(pairs, name+"="+addr)
-	}
-	return strings.Join(pairs, ",")
 }
 
 func ms(d time.Duration) string { return d.Round(time.Millisecond).String() }

@@ -20,6 +20,7 @@ import (
 	"github.com/shun159/molecule/dist"
 	"github.com/shun159/molecule/proc"
 	"github.com/shun159/quorum"
+	"github.com/shun159/quorum/internal/cmd/nodes"
 )
 
 func main() {
@@ -32,7 +33,7 @@ func main() {
 	length := flag.Duration("time", 10*time.Second, "how long the clients write among the keys")
 	flag.Parse()
 	if *node != "" {
-		runNode(*node, parseAddrs(*addrs), *dir)
+		runNode(*node, nodes.Parse(*addrs), *dir)
 		return
 	}
 	if *dir == "" {
@@ -55,7 +56,7 @@ func measure(parent string, keys, value, clients int, length time.Duration) erro
 	}
 	defer c.kill()
 	n := proc.NewNode(control)
-	d, err := dist.Start(n, dist.Config{Listen: c.addrs[control], Cookie: cookie, Resolve: resolver(c.addrs)})
+	d, err := dist.Start(n, dist.Config{Listen: c.addrs[control], Cookie: cookie, Resolve: nodes.Resolver(c.addrs)})
 	if err != nil {
 		return err
 	}
