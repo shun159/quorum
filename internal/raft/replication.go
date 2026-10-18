@@ -70,6 +70,8 @@ func (b behaviour[S, Cmd, Rep]) heartbeat(d *replica[S]) []actor.Effect {
 }
 
 // replicate sends every other member the entries it misses.
+//
+//abc:hot BenchmarkLeader
 func (b behaviour[S, Cmd, Rep]) replicate(d *replica[S]) []actor.Effect {
 	var effs []actor.Effect
 	for _, p := range d.peers {
@@ -82,6 +84,8 @@ func (b behaviour[S, Cmd, Rep]) replicate(d *replica[S]) []actor.Effect {
 // or the snapshot, if the leader has them no more. The next it sends p go
 // on from those, on their way, once p matched: a message lost, p tells
 // it lacks the entry before the next, and the leader goes back.
+//
+//abc:hot BenchmarkLeader
 func (b behaviour[S, Cmd, Rep]) appendTo(d *replica[S], p peer) []actor.Effect {
 	if p.next <= d.log.start {
 		return b.sendSnapshot(d, p)
@@ -111,6 +115,8 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d *replica[S], p peer) []actor.Effect {
 // appendEntries takes the entries of the leader, if the log matches the
 // leader's up to them, and replies how far it now matches, once they are
 // saved.
+//
+//abc:hot BenchmarkFollower
 func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d *replica[S], m appendEntries) (role, []actor.Effect) {
 	if m.Term < d.term {
 		// From a leader deposed, which learns of the later term.
@@ -139,6 +145,8 @@ func (b behaviour[S, Cmd, Rep]) appendEntries(r role, d *replica[S], m appendEnt
 
 // appendReply learns how far the log of a member matches the leader's, and
 // sends it what it still misses: from further back, if it failed.
+//
+//abc:hot BenchmarkLeader
 func (b behaviour[S, Cmd, Rep]) appendReply(r role, d *replica[S], m appendReply) (role, []actor.Effect) {
 	if r != leader || m.Term != d.term {
 		return r, nil
@@ -181,6 +189,8 @@ func (d *replica[S]) peer(id proc.PID) *peer {
 // voters holds, with those before it, and applies them. An entry of an
 // earlier term is never committed by counting, only by one of the term
 // after it: a majority may hold it, yet a later leader may not.
+//
+//abc:hot BenchmarkLeader,BenchmarkFollower
 func (b behaviour[S, Cmd, Rep]) commit(r role, d *replica[S]) []actor.Effect {
 	// The terms of the log only go up: below an entry of an earlier term,
 	// none is of this one.
@@ -195,6 +205,8 @@ func (b behaviour[S, Cmd, Rep]) commit(r role, d *replica[S]) []actor.Effect {
 // heldByMajority returns the last index a majority of the voters is known
 // to hold: the leader, once durable there, and the others as far as they
 // match.
+//
+//abc:hot BenchmarkLeader
 func (d *replica[S]) heldByMajority() uint64 {
 	held := make([]uint64, 0, len(d.peers)+1)
 	if d.config.isVoter(d.id) {
@@ -216,6 +228,8 @@ func (d *replica[S]) heldByMajority() uint64 {
 // apply applies the entries committed, not applied yet. The leader also
 // performs their effects, and replies to the commands; the others drop
 // both.
+//
+//abc:hot BenchmarkLeader,BenchmarkFollower
 func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 	var effs []actor.Effect
 	for d.applied < d.commit {
@@ -237,6 +251,8 @@ func (b behaviour[S, Cmd, Rep]) apply(r role, d *replica[S]) []actor.Effect {
 // and the effects of the machine. A command of a session applied before
 // is not applied again: its reply is the first's. One of a session
 // expired is not applied.
+//
+//abc:hot BenchmarkLeader,BenchmarkFollower
 func (b behaviour[S, Cmd, Rep]) applyEntry(d *replica[S], index uint64, e Entry) (any, []actor.Effect) {
 	d.sessions = d.sessions.passed(e.Time, b.spec.SessionTimeout)
 	switch {
