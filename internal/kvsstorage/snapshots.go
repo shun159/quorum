@@ -89,6 +89,12 @@ func (s storage) saveSnapshot(t *Table, index uint64, encode func() (raft.Encode
 		os.Remove(tmp)
 		return err
 	}
+	return commit(s.snapshotWrites(t, index)...)
+}
+
+// snapshotWrites are the writes of the snapshot of index, placed: its
+// record, and the deletes of the entries it holds, of the table t.
+func (s storage) snapshotWrites(t *Table, index uint64) []write {
 	writes := []write{put(s.key(KindSnapshot, 0), Record{Snapshot: index})}
 	for _, k := range s.keys(t, 1) {
 		if k.Index > index {
@@ -96,7 +102,7 @@ func (s storage) saveSnapshot(t *Table, index uint64, encode func() (raft.Encode
 		}
 		writes = append(writes, del(k))
 	}
-	return commit(writes...)
+	return writes
 }
 
 // locks are the locks of the snapshots of the groups, by directory.
