@@ -63,58 +63,92 @@ func measure(groups, size, maxFrame int) error {
 	for _, name := range append(slices.Clone(names), "measure@localhost") {
 		addrs[name] = nodes.FreeAddr()
 	}
-	procs := map[string]*exec.Cmd{}
-	defer func() {
-		for _, p := range procs {
-			p.Process.Kill()
-			p.Wait()
-		}
-	}()
-	for _, name := range names {
-		p, err := nodes.Start(name, addrs,
-			"-groups", fmt.Sprint(groups), "-maxframe", fmt.Sprint(maxFrame))
-		if err != nil {
-			return err
-		}
-		procs[name] = p
+	procs, err := startNodes(addrs, groups, maxFrame)
+	defer kill(procs)
+	if err != nil {
+		return err
 	}
-
 	n := proc.NewNode("measure@localhost")
 	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "snapshot", Resolve: nodes.Resolver(addrs), MaxFrame: maxFrame << 20})
 	if err != nil {
 		return err
 	}
 	defer d.Stop()
+	if err := foundGroups(n, groups); err != nil {
+		return err
+	}
+	if err := fill(n, groups, size); err != nil {
+		return err
+	}
+	load := startLoad(n, groups)
+	time.Sleep(3 * time.Second)
+	before, elections := load.window(), electionsOf(n)
+	took, err := addThird(n)
+	during := load.window()
+	load.stop()
+	report(took, err, before, during, electionsOf(n)-elections, procs)
+	return nil
+}
+
+// startNodes starts the three nodes, with the small groups, and the
+// largest frame dist takes, in MB.
+func startNodes(addrs map[string]string, groups, maxFrame int) (map[string]*exec.Cmd, error) {
+	procs := map[string]*exec.Cmd{}
+	for _, name := range names {
+		p, err := nodes.Start(name, addrs,
+			"-groups", fmt.Sprint(groups), "-maxframe", fmt.Sprint(maxFrame))
+		if err != nil {
+			return procs, err
+		}
+		procs[name] = p
+	}
+	return procs, nil
+}
+
+func kill(procs map[string]*exec.Cmd) {
+	for _, p := range procs {
+		p.Process.Kill()
+		p.Wait()
+	}
+}
+
+// foundGroups founds the small groups on the three nodes, and the large
+// one on the first two.
+func foundGroups(n *proc.Node, groups int) error {
 	ctx := context.Background()
 	for g := range groups {
 		if err := quorum.Found(ctx, n, small(g), names); err != nil {
 			return err
 		}
 	}
-	two := names[:2]
-	if err := quorum.Found(ctx, n, big, two); err != nil {
-		return err
-	}
+	return quorum.Found(ctx, n, big, names[:2])
+}
+
+// fill makes the state of the large group size MB, and tells how long it
+// took, and who leads it.
+func fill(n *proc.Node, groups, size int) error {
 	start := time.Now()
-	if _, err := quorum.Command[int](ctx, n, big, two, size<<20); err != nil {
+	if _, err := quorum.Command[int](context.Background(), n, big, names[:2], size<<20); err != nil {
 		return err
 	}
-	leader := leaderOf(n, big)
 	fmt.Printf("%d small groups; a state of %d MB on %s and %s, made in %v; %s leads it\n",
-		groups, size, two[0], two[1], ms(time.Since(start)), leader)
+		groups, size, names[0], names[1], ms(time.Since(start)), leaderOf(n, big))
+	return nil
+}
 
-	load := startLoad(n, groups)
-	time.Sleep(3 * time.Second)
-	before := load.window()
-	elections := electionsOf(n)
+// addThird adds the third node to the large group, which sends it the
+// state, and returns how long it took.
+func addThird(n *proc.Node) (time.Duration, error) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	err := quorum.AddMember(ctx, n, big, names[:2], names[2])
+	return time.Since(start), err
+}
 
-	start = time.Now()
-	addCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	err = quorum.AddMember(addCtx, n, big, two, names[2])
-	cancel()
-	took := time.Since(start)
-	during := load.window()
-	load.stop()
+// report tells how the addition went, the small groups before and during
+// it, their elections, and the memory of the nodes.
+func report(took time.Duration, err error, before, during string, elections int64, procs map[string]*exec.Cmd) {
 	if err != nil {
 		fmt.Printf("adding %s: %v, after %v\n", names[2], err, ms(took))
 	} else {
@@ -122,11 +156,10 @@ func measure(groups, size, maxFrame int) error {
 	}
 	fmt.Printf("small groups before: %s\n", before)
 	fmt.Printf("small groups during: %s\n", during)
-	fmt.Printf("elections of the small groups during: %d\n", electionsOf(n)-elections)
+	fmt.Printf("elections of the small groups during: %d\n", elections)
 	for _, name := range names {
 		fmt.Printf("%s: %s\n", name, memory(procs[name].Process.Pid))
 	}
-	return nil
 }
 
 // leaderOf returns the node leading group, as the nodes tell.

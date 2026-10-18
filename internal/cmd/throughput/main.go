@@ -64,13 +64,43 @@ func measure(groups, clients int, length time.Duration, dir string) error {
 	for _, name := range append(slices.Clone(names), "measure@localhost") {
 		addrs[name] = nodes.FreeAddr()
 	}
+	procs, err := startNodes(addrs, groups, dir)
+	defer kill(procs)
+	if err != nil {
+		return err
+	}
+	n, d, err := join(addrs, groups)
+	if err != nil {
+		return err
+	}
+	defer d.Stop()
+	fmt.Printf("%d groups, %d clients each, %v, %s\n", groups, clients, length, where(dir))
+	r, err := send(n, procs, groups, clients, length)
+	if err != nil {
+		return err
+	}
+	return r.report(groups)
+}
+
+// join joins the nodes from a node of the measure's own, and founds the
+// groups.
+func join(addrs map[string]string, groups int) (*proc.Node, *dist.Dist, error) {
+	n := proc.NewNode("measure@localhost")
+	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "throughput", Resolve: nodes.Resolver(addrs)})
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := found(n, groups); err != nil {
+		d.Stop()
+		return nil, nil, err
+	}
+	return n, d, nil
+}
+
+// startNodes starts the three nodes, with the groups, their storage under
+// dir if any.
+func startNodes(addrs map[string]string, groups int, dir string) (map[string]*exec.Cmd, error) {
 	procs := map[string]*exec.Cmd{}
-	defer func() {
-		for _, p := range procs {
-			p.Process.Kill()
-			p.Wait()
-		}
-	}()
 	for _, name := range names {
 		nodeDir := ""
 		if dir != "" {
@@ -78,52 +108,72 @@ func measure(groups, clients int, length time.Duration, dir string) error {
 		}
 		p, err := nodes.Start(name, addrs, "-groups", fmt.Sprint(groups), "-dir", nodeDir)
 		if err != nil {
-			return err
+			return procs, err
 		}
 		procs[name] = p
 	}
+	return procs, nil
+}
 
-	n := proc.NewNode("measure@localhost")
-	d, err := dist.Start(n, dist.Config{Listen: addrs[n.Name()], Cookie: "throughput", Resolve: nodes.Resolver(addrs)})
-	if err != nil {
-		return err
+func kill(procs map[string]*exec.Cmd) {
+	for _, p := range procs {
+		p.Process.Kill()
+		p.Wait()
 	}
-	defer d.Stop()
-	if err := found(n, groups); err != nil {
-		return err
-	}
-	where := "in memory"
+}
+
+func where(dir string) string {
 	if dir != "" {
-		where = "on disk"
+		return "on disk"
 	}
-	fmt.Printf("%d groups, %d clients each, %v, %s\n", groups, clients, length, where)
+	return "in memory"
+}
 
+// A run is what came of the clients sending: the latencies of the
+// commands applied, how many failed, how long they sent, the CPU the nodes
+// took meanwhile, and the elections.
+type run struct {
+	lat        []time.Duration
+	failed     int
+	took, used time.Duration
+	elections  int64
+}
+
+// send has the clients send to the groups for length, once the elections
+// settled, and returns what came of it.
+func send(n *proc.Node, procs map[string]*exec.Cmd, groups, clients int, length time.Duration) (run, error) {
 	time.Sleep(time.Second) // for the elections to settle
 	elections := electionsOf(n)
 	cpu := cpuOf(procs)
 	start := time.Now()
 	ss, err := startSenders(n, groups, clients, start.Add(length))
 	if err != nil {
-		return err
+		return run{}, err
 	}
 	time.Sleep(time.Until(start.Add(length)))
-	took := time.Since(start)
-	used := cpuOf(procs) - cpu
+	r := run{took: time.Since(start), used: cpuOf(procs) - cpu}
 	time.Sleep(time.Second) // for the last commands to end
-	lat, failed, err := ss.results(n)
-	if err != nil {
-		return err
-	}
+	r.lat, r.failed, err = ss.results(n)
+	r.elections = electionsOf(n) - elections
+	return r, err
+}
 
+// report tells the commands applied a second, their latency, the CPU a
+// command, and the elections.
+func (r run) report(groups int) error {
+	lat := r.lat
 	slices.Sort(lat)
 	if len(lat) == 0 {
-		return fmt.Errorf("no command applied, %d failed", failed)
+		return fmt.Errorf("no command applied, %d failed", r.failed)
 	}
-	rate := float64(len(lat)) / took.Seconds()
-	fmt.Printf("%.0f commands/s (%.0f a group), %d failed\n", rate, rate/float64(groups), failed)
-	fmt.Printf("latency: median %v, p99 %v, max %v\n", us(lat[len(lat)/2]), us(lat[len(lat)*99/100]), us(lat[len(lat)-1]))
-	fmt.Printf("nodes' CPU: %.2f cores, %.1f µs a command\n", used.Seconds()/took.Seconds(), float64(used.Microseconds())/float64(len(lat)))
-	fmt.Printf("elections meanwhile: %d\n", electionsOf(n)-elections)
+	n := float64(len(lat))
+	rate := n / r.took.Seconds()
+	median, p99, worst := lat[len(lat)/2], lat[len(lat)*99/100], lat[len(lat)-1]
+	cores, perCommand := r.used.Seconds()/r.took.Seconds(), float64(r.used.Microseconds())/n
+	fmt.Printf("%.0f commands/s (%.0f a group), %d failed\n", rate, rate/float64(groups), r.failed)
+	fmt.Printf("latency: median %v, p99 %v, max %v\n", us(median), us(p99), us(worst))
+	fmt.Printf("nodes' CPU: %.2f cores, %.1f µs a command\n", cores, perCommand)
+	fmt.Printf("elections meanwhile: %d\n", r.elections)
 	return nil
 }
 
@@ -187,6 +237,17 @@ func runNode(name string, addrs map[string]string, groups int, dir string) {
 	if _, err := dist.Start(n, dist.Config{Listen: addrs[name], Cookie: "throughput", Resolve: nodes.Resolver(addrs)}); err != nil {
 		log.Fatal(err)
 	}
+	spec := supervisor.Spec{Strategy: supervisor.OneForAll, Children: childrenOf(groups, dir)}
+	if _, err := supervisor.Start(context.Background(), n, spec); err != nil {
+		log.Fatal(err)
+	}
+	nodes.Ready()
+	select {}
+}
+
+// childrenOf are the children of a node: the counter of elections, the
+// storage if on disk, and the members of the groups.
+func childrenOf(groups int, dir string) []supervisor.ChildSpec {
 	var members []supervisor.ChildSpec
 	for g := range groups {
 		spec := quorum.Spec[int, int, int]{Group: group(g), Machine: counter{}, Dir: dir}
@@ -196,12 +257,7 @@ func runNode(name string, addrs map[string]string, groups int, dir string) {
 	if dir != "" {
 		children = append(children, supervisor.ChildSpec{ID: "storage", Start: quorum.Storage(dir)})
 	}
-	children = append(children, supervisor.ChildSpec{ID: "members", Start: supervisor.Child(supervisor.Spec{Strategy: supervisor.OneForOne, Children: members})})
-	if _, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForAll, Children: children}); err != nil {
-		log.Fatal(err)
-	}
-	nodes.Ready()
-	select {}
+	return append(children, supervisor.ChildSpec{ID: "members", Start: supervisor.Child(supervisor.Spec{Strategy: supervisor.OneForOne, Children: members})})
 }
 
 func group(g int) string { return fmt.Sprintf("g%d", g) }
