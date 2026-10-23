@@ -1,5 +1,8 @@
 # quorum
 
+[![CI](https://github.com/shun159/quorum/actions/workflows/ci.yml/badge.svg)](https://github.com/shun159/quorum/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/shun159/quorum.svg)](https://pkg.go.dev/github.com/shun159/quorum)
+
 quorum replicates a state machine over the nodes of a group, by the Raft
 consensus algorithm, on [molecule](https://github.com/shun159/molecule):
 any state machine, of the application's own types, run in the
