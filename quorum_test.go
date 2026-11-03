@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -376,5 +377,83 @@ func TestCreateGroup(t *testing.T) {
 	}
 	if on := c.runs("y"); len(on) != 3 {
 		t.Errorf("y runs on %v", on)
+	}
+}
+
+// wipe stops the node name and loses its disk: started again, it is blank.
+func (c *cluster) wipe(name string) {
+	c.t.Helper()
+	c.stop(name)
+	if err := os.RemoveAll(filepath.Join(c.dir, name)); err != nil {
+		c.t.Fatal(err)
+	}
+	c.start(name)
+}
+
+// A node back on a blank disk takes its place again by ReplaceMember,
+// with all the group applied; run again, ReplaceMember changes nothing,
+// and it finishes a replacement stopped after the removal.
+func TestReplaceMember(t *testing.T) {
+	c := newCluster(t, highest{}, group)
+	a := c.nodes[names[0]].n
+	if err := quorum.Found(ctx(t), a, group, names); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raise(ctx(t), a, group, 5); err != nil {
+		t.Fatal(err)
+	}
+	cc := names[2]
+	c.wipe(cc)
+	for range 2 {
+		if err := quorum.ReplaceMember(ctx(t), a, group, names, cc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.wipe(cc)
+	if err := quorum.RemoveMember(ctx(t), a, group, names, cc); err != nil {
+		t.Fatal(err)
+	}
+	if err := quorum.ReplaceMember(ctx(t), a, group, names, cc); err != nil {
+		t.Fatalf("after the removal alone: %v", err)
+	}
+
+	// c counts: with a gone, b and c are a majority, and c holds 5.
+	c.stop(names[0])
+	b := c.nodes[names[1]].n
+	if h, err := raise(ctx(t), b, group, 6); err != nil || h != 6 {
+		t.Fatalf("a down: %d, %v", h, err)
+	}
+	if h, err := quorum.Read[int](ctx(t), c.nodes[cc].n, group, names[1:], 0); err != nil || h != 6 {
+		t.Errorf("read on c: %d, %v, want 6", h, err)
+	}
+}
+
+// Without a majority, ReplaceMember does nothing until its context ends:
+// the group, unavailable, keeps all it applied, and the replacement is
+// done once the majority is back.
+func TestReplaceMemberNoMajority(t *testing.T) {
+	c := newCluster(t, highest{}, group)
+	a := c.nodes[names[0]].n
+	if err := quorum.Found(ctx(t), a, group, names); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raise(ctx(t), a, group, 5); err != nil {
+		t.Fatal(err)
+	}
+	b, cc := names[1], names[2]
+	c.stop(b)
+	c.wipe(cc)
+	short, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := quorum.ReplaceMember(short, a, group, names, cc); err == nil {
+		t.Fatal("replaced c with b down")
+	}
+
+	c.start(b)
+	if err := quorum.ReplaceMember(ctx(t), a, group, names, cc); err != nil {
+		t.Fatalf("b back: %v", err)
+	}
+	if h, err := raise(ctx(t), a, group, 0); err != nil || h != 5 {
+		t.Errorf("after: %d, %v, want 5", h, err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/genstatem"
+	"github.com/shun159/molecule/proc"
 )
 
 // Found is quorum.Found.
@@ -64,18 +65,41 @@ func (d *replica[S]) foundedWith(config Config) bool {
 
 // AddMember is quorum.AddMember.
 func AddMember(ctx context.Context, caller actor.Caller, group string, nodes []string, node string) error {
-	v, err := actor.Call(ctx, caller, actor.Remote{Node: node, Name: replicaName(group)}, identify{})
+	id, err := identifyOn(ctx, caller, group, node)
 	if err != nil {
 		return fmt.Errorf("quorum: adding to group %s the member on %s: %w", group, node, err)
 	}
-	_, err = ask(ctx, caller, group, nodes, addMember{v.(identity).ID})
+	_, err = ask(ctx, caller, group, nodes, addMember{id})
 	return err
 }
 
 // RemoveMember is quorum.RemoveMember.
 func RemoveMember(ctx context.Context, caller actor.Caller, group string, nodes []string, node string) error {
-	_, err := ask(ctx, caller, group, nodes, removeMember{node})
+	_, err := ask(ctx, caller, group, nodes, removeMember{Node: node})
 	return err
+}
+
+// ReplaceMember is quorum.ReplaceMember. The member running on node is
+// kept by the removal: run again once it is added, nothing changes.
+func ReplaceMember(ctx context.Context, caller actor.Caller, group string, nodes []string, node string) error {
+	id, err := identifyOn(ctx, caller, group, node)
+	if err != nil {
+		return fmt.Errorf("quorum: replacing in group %s the member on %s: %w", group, node, err)
+	}
+	if _, err := ask(ctx, caller, group, nodes, removeMember{Node: node, Keep: id}); err != nil {
+		return err
+	}
+	_, err = ask(ctx, caller, group, nodes, addMember{id})
+	return err
+}
+
+// identifyOn returns who the member of group running on node is.
+func identifyOn(ctx context.Context, caller actor.Caller, group, node string) (proc.PID, error) {
+	v, err := actor.Call(ctx, caller, actor.Remote{Node: node, Name: replicaName(group)}, identify{})
+	if err != nil {
+		return proc.PID{}, err
+	}
+	return v.(identity).ID, nil
 }
 
 // change handles a change of the members. The leader appends the
@@ -160,7 +184,7 @@ func (b behaviour[S, Cmd, Rep]) changed(config Config, m any) (Config, error) {
 		return config.withLearner(m.ID), nil
 	case removeMember:
 		id, ok := config.on(m.Node)
-		if !ok {
+		if !ok || id == m.Keep {
 			return config, nil
 		}
 		if config.isVoter(id) && len(config.Voters) == 1 {

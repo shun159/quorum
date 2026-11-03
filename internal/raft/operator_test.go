@@ -75,7 +75,7 @@ func (o operator) HandleInfo(s swapping, msg any) (swapping, []actor.Effect) {
 func (o operator) try(s swapping) []actor.Effect {
 	switch s.step {
 	case removing:
-		return o.request(s.ask, removeMember{s.node})
+		return o.request(s.ask, removeMember{Node: s.node})
 	case identifying:
 		return o.request(s.node, identify{})
 	case adding:

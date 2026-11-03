@@ -143,7 +143,7 @@ func TestNodeSwap(t *testing.T) {
 	}
 	g.loseDisk("c")
 	g.restart("c")
-	if _, err := g.ask(removeMember{"c"}); err != nil {
+	if _, err := g.ask(removeMember{Node: "c"}); err != nil {
 		t.Fatalf("remove c: %v", err)
 	}
 	newc := g.identify("c")
@@ -167,6 +167,31 @@ func TestNodeSwap(t *testing.T) {
 	}
 }
 
+// A removal keeping the member on the node removes the one before it, but
+// not that one: a replacement run again, once done, appends nothing.
+func TestRemoveKeeps(t *testing.T) {
+	g := newGroup(t, 1, three)
+	g.loseDisk("c")
+	g.restart("c")
+	newc := g.identify("c")
+	replace := func() uint64 {
+		t.Helper()
+		for _, req := range []any{removeMember{Node: "c", Keep: newc}, addMember{newc}} {
+			if _, err := g.ask(req); err != nil {
+				t.Fatalf("%#v: %v", req, err)
+			}
+		}
+		_, ld, _ := g.member(g.leader())
+		if committed := ld.log.configUpTo(ld.commit); !committed.isVoter(newc) || len(committed.Voters) != 3 {
+			t.Fatalf("replaced: %+v", committed)
+		}
+		return ld.log.lastIndex()
+	}
+	if first, again := replace(), replace(); again != first {
+		t.Errorf("run again, the log grew from %d to %d", first, again)
+	}
+}
+
 // A node with a member keeps it until it is removed: the member of a new
 // disk is not added in its place.
 func TestAddOverMember(t *testing.T) {
@@ -184,7 +209,7 @@ func TestRemoveLeader(t *testing.T) {
 	g := newGroup(t, 1, three)
 	g.run(2 * time.Second)
 	old := g.leader()
-	if _, err := g.ask(removeMember{old}); err != nil {
+	if _, err := g.ask(removeMember{Node: old}); err != nil {
 		t.Fatalf("remove %s: %v", old, err)
 	}
 	g.run(2 * time.Second)
@@ -203,7 +228,7 @@ func TestRemoveLeader(t *testing.T) {
 // The last voter cannot be removed.
 func TestRemoveLastVoter(t *testing.T) {
 	g := newGroup(t, 1, []string{"a"})
-	if _, err := g.ask(removeMember{"a"}); err == nil {
+	if _, err := g.ask(removeMember{Node: "a"}); err == nil {
 		t.Error("removed the last voter")
 	}
 }
@@ -214,7 +239,7 @@ func TestOneChangeAtATime(t *testing.T) {
 	d.term, d.commit = 1, 1
 	d.log = d.log.add(Entry{Term: 1, Config: &Config{Voters: []proc.PID{ida, idb, idc, proc.NewNode("d").NewPID()}}})
 	d.logChanged(0) // a change appended, not committed
-	call := genstatem.Call{Req: removeMember{"c"}}
+	call := genstatem.Call{Req: removeMember{Node: "c"}}
 	if _, _, effs := b.HandleEvent(leader, d, call); len(effs) != 1 || effs[0] != call.Reply(busy{}) {
 		t.Errorf("a second change: %v", effs)
 	}
