@@ -97,11 +97,27 @@ func Found(ctx context.Context, caller actor.Caller, group string, nodes []strin
 // asks the next, and waits on.
 //
 // The node must have no member in the group: one on a new disk, which
-// replaces another on the node, is added once that one is removed. Disks
+// replaces another on the node, is added once that one is removed, as
+// ReplaceMember does. Disks
 // swapped one node after another, each AddMember returning before the next
 // node is taken down, the group keeps its majority throughout.
 func AddMember(ctx context.Context, caller actor.Caller, group string, nodes []string, node string) error {
 	return raft.AddMember(ctx, caller, group, nodes, node)
+}
+
+// ReplaceMember has the member running on node take the place of the
+// member node had in group, asking the members on nodes for the leader:
+// it removes that one, then adds the one running, as RemoveMember and
+// AddMember do, and returns once it is a voter. It is how a node back on a
+// blank disk, its storage lost or damaged, rejoins: the member there is a
+// new one, in no configuration, which neither votes nor counts toward a
+// majority until it is added and has caught up.
+//
+// It can be run again, as after failing midway: the member running is
+// never removed. Without a majority of the voters, nothing changes until
+// ctx ends.
+func ReplaceMember(ctx context.Context, caller actor.Caller, group string, nodes []string, node string) error {
+	return raft.ReplaceMember(ctx, caller, group, nodes, node)
 }
 
 // TransferLeader has the leader of group, found among the members on

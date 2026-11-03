@@ -148,7 +148,10 @@ type (
 // for the change before.
 type (
 	addMember    struct{ ID proc.PID }
-	removeMember struct{ Node string }
+	removeMember struct {
+		Node string
+		Keep proc.PID // not removed if it is the member on Node
+	}
 
 	transferLeader struct{ To string } // the node to hand the lead to
 	busy           struct{}            // not appended: a change is under way
