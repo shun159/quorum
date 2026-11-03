@@ -153,6 +153,9 @@ func (s storage) loadSnapshot(t *Table, index uint64) (raft.SavedSnapshot, error
 	return raft.SavedSnapshot{Index: index, Encoded: enc}, nil
 }
 
+// SaveState returns the effect putting st.
+//
+//abc:hot BenchmarkSaveState
 func (s storage) SaveState(st raft.State, tag any) actor.Effect {
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) ([]write, error) {
 		return []write{put(s.key(KindState, 0), Record{State: st})}, nil
@@ -169,6 +172,8 @@ func (s storage) Durable(msg any) (any, error, bool) {
 // last first, then puts the new ones, in order: should the node crash amid
 // them, the log left on disk is the start of the old one, or of the new
 // one, never old entries after new ones.
+//
+//abc:hot BenchmarkAppend
 func (s storage) Append(index uint64, entries []raft.Entry, tag any) actor.Effect {
 	return writesEffect{s: s, tag: tag, writes: func(t *Table) ([]write, error) {
 		var writes []write
@@ -190,6 +195,8 @@ func (s storage) SaveSnapshot(index uint64, encode func() (raft.Encoded, error),
 }
 
 // keys returns the keys of the entries saved in t from index on, in order.
+//
+//abc:hot BenchmarkAppend
 func (s storage) keys(t *Table, index uint64) []Key {
 	var keys []Key
 	for k := range t.Range(s.key(KindEntry, index), s.end()) {
@@ -215,6 +222,7 @@ type writesEffect struct {
 	writes func(*Table) ([]write, error)
 }
 
+//abc:hot BenchmarkAppend,BenchmarkSaveState
 func (e writesEffect) Perform(env gen.Env) {
 	t, err := e.s.table()
 	if err != nil {
