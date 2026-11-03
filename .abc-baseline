@@ -8,19 +8,3 @@
 12.4 examples/pubsub machine.Read case Fetch
 19.2 examples/pubsub main
 21 examples/pubsub subscriber.HandleInfo
-45.5 internal/cmd/failover measure
-10.8 internal/cmd/failover measure cyclo
-49.9 internal/cmd/failover measure lines
-27.8 internal/cmd/kv measure
-4 internal/cmd/linearizable link.copy nesting
-39.8 internal/cmd/snapshot measure
-10.7 internal/cmd/snapshot measure cyclo
-49.8 internal/cmd/snapshot measure lines
-47.8 internal/cmd/throughput measure
-11.8 internal/cmd/throughput measure cyclo
-51.6 internal/cmd/throughput measure lines
-17.7 internal/cmd/throughput runNode
-18.5 internal/kvsstorage storage.Load
-17.8 internal/kvsstorage storage.saveSnapshot
-21.3 internal/raft behaviour.Init
-17.7 internal/raft behaviour.change
