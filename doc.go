@@ -82,13 +82,34 @@
 // tells the others it holds a command once it is on disk. A member is
 // known by who it first was on its storage, blank: on a new disk, or
 // without a Dir, a member restarted is another, in no group. To swap the
-// disk of a node, remove its member, then add the new one; once added, the
-// next node may be swapped.
+// disk of a node, start the node on the new one, and [ReplaceMember] puts
+// its member back; once it returns, the next node may be swapped.
 //
 // Once SnapshotEvery commands are applied past its last snapshot, a member
 // keeps the state of its machine in place of them, so that what it keeps
 // does not grow for good. A member missing commands the others keep no
 // more, as one just added, takes the state of the leader's machine.
+//
+// # Damage
+//
+// A damaged storage (a write that a later one tells durable changed on
+// disk, or a snapshot file changed or lost) fails to open, or its member
+// fails to load, with an error that is [ErrCorrupt], and the node does not
+// start. Only the other members hold what was there. quorum deletes
+// nothing. Never start the node on that storage again, nor on an older
+// copy of it: a member that forgets what it saved may vote twice in a
+// term, or forget commands it told the leader it held, and the group may
+// lose what it committed. On ErrCorrupt, and not on another error of the
+// disk, such as one not mounted:
+//
+//  1. Move the directory of the storage aside, to look at later.
+//  2. Start the node on a blank one. Under [Groups], the groups started on
+//     the node were kept in that storage: start each again, StartMember.
+//  3. For each group the node was in, [ReplaceMember]. Until it returns,
+//     the group has one voter less, and bears one failure less.
+//
+// With a majority of a group damaged, ReplaceMember waits, as the group
+// does: it commits nothing more, and loses nothing the members left hold.
 //
 // # Clients
 //
