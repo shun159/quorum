@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -166,11 +167,27 @@ func place(dir, tmp string, index uint64) error {
 	return syncDir(dir)
 }
 
-var errSnapshotFile = errors.New("kvsstorage: a snapshot file cut short or changed")
+// damage is damage to the files of a member, as kvs.ErrCorrupt is to its
+// table, which it is, by errors.Is.
+type damage string
+
+func (d damage) Error() string { return string(d) }
+
+func (damage) Is(target error) bool { return target == kvs.ErrCorrupt }
+
+// A snapshot file is there whole once its record is durable: missing, it
+// was lost.
+const (
+	errSnapshotFile damage = "kvsstorage: a snapshot file cut short or changed"
+	errSnapshotLost damage = "kvsstorage: the snapshot file its record names is missing"
+)
 
 // readSnapshot reads the snapshot of index from its file in dir.
 func readSnapshot(dir string, index uint64) (raft.Encoded, error) {
 	b, err := os.ReadFile(snapshotFile(dir, index))
+	if errors.Is(err, fs.ErrNotExist) {
+		return raft.Encoded{}, errSnapshotLost
+	}
 	if err != nil {
 		return raft.Encoded{}, err
 	}

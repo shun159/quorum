@@ -259,7 +259,7 @@ func TestRegistered(t *testing.T) {
 }
 
 // A snapshot is kept in a file of its own, the latest few kept; a file
-// changed fails Load.
+// changed, or lost, fails Load with kvs.ErrCorrupt.
 func TestSnapshotFiles(t *testing.T) {
 	dir := t.TempDir()
 	table, err := Open(dir)
@@ -287,8 +287,12 @@ func TestSnapshotFiles(t *testing.T) {
 	b, _ := os.ReadFile(last)
 	b[len(b)-5] ^= 1
 	os.WriteFile(last, b, 0o644)
-	if _, err := g.Load(); err == nil {
-		t.Error("loaded a snapshot changed on disk")
+	if _, err := g.Load(); !errors.Is(err, kvs.ErrCorrupt) {
+		t.Errorf("loaded a snapshot changed on disk: %v", err)
+	}
+	os.Remove(last)
+	if _, err := g.Load(); !errors.Is(err, kvs.ErrCorrupt) {
+		t.Errorf("loaded a snapshot lost: %v", err)
 	}
 }
 
