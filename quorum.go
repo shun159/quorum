@@ -6,6 +6,7 @@ import (
 
 	"github.com/shun159/molecule/actor"
 	"github.com/shun159/molecule/behaviours/gen"
+	"github.com/shun159/molecule/kvs"
 	"github.com/shun159/quorum/internal/kvsstorage"
 	"github.com/shun159/quorum/internal/raft"
 )
@@ -34,6 +35,13 @@ func Child[S, Cmd, Rep any](spec Spec[S, Cmd, Rep]) gen.Child {
 func Storage(dir string) gen.Child {
 	return kvsstorage.Child(dir)
 }
+
+// ErrCorrupt is wrapped by the error of a Storage that cannot open, or of
+// a member that cannot load what it saved, as what is on disk is damaged,
+// or lost: a write a later one tells durable, or a snapshot file. Only
+// the other members hold what was there: the node starts again on a blank
+// disk, and ReplaceMember puts its members back. It is kvs.ErrCorrupt.
+var ErrCorrupt = kvs.ErrCorrupt
 
 // ErrLeaderChanged is the error of a command whose leader lost its place
 // before it could tell: the command may have been applied, or not.
