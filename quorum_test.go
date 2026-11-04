@@ -90,10 +90,17 @@ func newCluster(t *testing.T, m quorum.Machine[int, int, int], groups ...string)
 // start starts the node name, on what it saved, if anything.
 func (c *cluster) start(name string) {
 	c.t.Helper()
+	if err := c.tryStart(name); err != nil {
+		c.t.Fatal(err)
+	}
+}
+
+// tryStart is start, returning why the node could not start.
+func (c *cluster) tryStart(name string) error {
 	n := proc.NewNode(name)
 	d, err := dist.Start(n, dist.Config{Listen: "127.0.0.1:0", Cookie: "quorum", Resolve: c.resolve})
 	if err != nil {
-		c.t.Fatal(err)
+		return err
 	}
 	c.mu.Lock()
 	c.addrs[name] = d.Addr().String()
@@ -110,9 +117,11 @@ func (c *cluster) start(name string) {
 	}
 	sup, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForAll, Children: children})
 	if err != nil {
-		c.t.Fatal(err)
+		d.Stop()
+		return err
 	}
 	c.nodes[name] = &node{n: n, d: d, sup: sup}
+	return nil
 }
 
 // stop stops the node name, if it runs.
