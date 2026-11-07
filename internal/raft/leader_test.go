@@ -207,6 +207,48 @@ func TestPipeline(t *testing.T) {
 	}
 }
 
+// A member that does not reply is sent maxInflight entries, no more, and
+// beats after what it is known to hold; once it replies, the rest.
+func TestInflightBounded(t *testing.T) {
+	b, d := leading(t)
+	b.spec.Quiet = -1 // never quiet
+	for i := range d.peers {
+		d.peers[i].matched = true
+	}
+	to := func(effs []actor.Effect) (msgs []appendEntries, entries int) {
+		for _, m := range sent(effs) {
+			if m, ok := m.(appendEntries); ok && m.To == ida {
+				msgs, entries = append(msgs, m), entries+len(m.Entries)
+			}
+		}
+		return msgs, entries
+	}
+	inflight := 0
+	var effs []actor.Effect
+	for range maxInflight + 100 {
+		_, d, effs = b.HandleEvent(leader, d, genstatem.Call{From: reader, Req: command{Cmd: 1}})
+		msgs, n := to(effs)
+		if inflight == maxInflight && len(msgs) > 0 {
+			t.Fatalf("the window full, a command sent %+v", msgs)
+		}
+		inflight += n
+	}
+	if inflight != maxInflight {
+		t.Fatalf("sent %d entries, no reply; want %d", inflight, maxInflight)
+	}
+	for range 2 { // the first beat skipped: entries were sent since the last
+		_, d, effs = b.HandleEvent(leader, d, genstatem.StateTimeout{})
+	}
+	if msgs, n := to(effs); len(msgs) != 1 || msgs[0].PrevIndex != 2 || n != 0 {
+		t.Fatalf("beat %+v; want one after 2, of no entries", msgs)
+	}
+	reply := appendReply{Term: 1, From: ida, Success: true, Match: 2 + maxEntries}
+	_, _, effs = b.HandleEvent(leader, d, genstatem.Info{Msg: reply})
+	if msgs, n := to(effs); len(msgs) != 1 || msgs[0].PrevIndex != 2+maxInflight || n != maxEntries {
+		t.Errorf("told %d held, sent %+v; want the %d after %d", 2+maxEntries, msgs, maxEntries, 2+maxInflight)
+	}
+}
+
 // A member sent entries since the last beat is not beaten to: it knows the
 // leader lives. The beat after, it is.
 func TestBeatSkipped(t *testing.T) {
