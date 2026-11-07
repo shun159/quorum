@@ -111,6 +111,13 @@
 // With a majority of a group damaged, ReplaceMember waits, as the group
 // does: it commits nothing more, and loses nothing the members left hold.
 //
+// A snapshot file is a group's own: under Groups, a member whose snapshot
+// file is damaged or lost stays down, while the node starts the others,
+// and StartMember of its group fails with ErrCorrupt. That group alone is
+// replaced: [DeleteMember], which deletes what its member saved, then
+// StartMember and ReplaceMember. A member started by Child keeps the node
+// from starting, which is replaced whole.
+//
 // # Clients
 //
 // [Command] sends a command and waits for its reply; should its leader be

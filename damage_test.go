@@ -38,6 +38,18 @@ func (c *cluster) damage(name string) {
 	}
 }
 
+// awaitRuns waits for the member of group to run on node, as the Groups
+// of the node start it after the node starts.
+func (c *cluster) awaitRuns(group, node string) {
+	c.t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !slices.Contains(c.runs(group), node); {
+		if time.Now().After(deadline) {
+			c.t.Fatalf("%s runs on %v only", group, c.runs(group))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func size(name string) int64 {
 	fi, err := os.Stat(name)
 	if err != nil {
@@ -61,7 +73,7 @@ func (c *cluster) blank(name string) {
 // groups started and their members replaced, as the package doc says, it
 // takes part in every group again, with all it applied.
 func TestDamagedStorage(t *testing.T) {
-	c := newDynamic(t)
+	c := newDynamic(t, 0)
 	a := c.nodes[names[0]].n
 	groups := []string{"x", "y"}
 	for _, g := range groups {
@@ -135,5 +147,61 @@ func TestDamagedMajority(t *testing.T) {
 	}
 	if !slices.ContainsFunc(saved.Log, func(e raft.Entry) bool { return e.Cmd == 19 }) {
 		t.Errorf("a lost 19: %d entries", len(saved.Log))
+	}
+}
+
+// Under Groups, a node whose snapshot of x is damaged starts its member of
+// y, not of x, which DeleteMember, StartMember and ReplaceMember put back
+// alone, as the package doc says.
+func TestDamagedSnapshot(t *testing.T) {
+	c := newDynamic(t, 5)
+	a := c.nodes[names[0]].n
+	groups := []string{"x", "y"}
+	for _, g := range groups {
+		if err := quorum.CreateGroup(ctx(t), a, g, names); err != nil {
+			t.Fatal(err)
+		}
+		for n := range 20 {
+			if _, err := raise(ctx(t), a, g, n); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	cc := names[2]
+	c.stop(cc)
+	snaps, _ := filepath.Glob(filepath.Join(c.dir, cc, "snapshots", "x", "*.snap"))
+	if len(snaps) == 0 {
+		t.Fatal("c has no snapshot of x")
+	}
+	for _, snap := range snaps {
+		if err := os.WriteFile(snap, []byte("damaged"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.start(cc)
+	c.awaitRuns("y", cc)
+	if on := c.runs("x"); slices.Contains(on, cc) {
+		t.Errorf("x runs on %v, its snapshot on c damaged", on)
+	}
+	if err := quorum.StartMember(ctx(t), a, "x", cc); !errors.Is(err, quorum.ErrCorrupt) {
+		t.Errorf("start x on c: %v, want ErrCorrupt", err)
+	}
+
+	for _, step := range []func(context.Context) error{
+		func(ctx context.Context) error { return quorum.DeleteMember(ctx, a, "x", cc) },
+		func(ctx context.Context) error { return quorum.StartMember(ctx, a, "x", cc) },
+		func(ctx context.Context) error { return quorum.ReplaceMember(ctx, a, "x", names, cc) },
+	} {
+		if err := step(ctx(t)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// c counts in both: with a gone, b and c are a majority.
+	c.stop(names[0])
+	b := c.nodes[names[1]].n
+	for _, g := range groups {
+		if h, err := raise(ctx(t), b, g, 20); err != nil || h != 20 {
+			t.Errorf("%s, a down: %d, %v", g, h, err)
+		}
 	}
 }

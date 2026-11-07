@@ -74,13 +74,16 @@ const (
 )
 
 // keeperReq asks the keeper to start the member of Group, or to delete it;
-// keeperRep answers, with the error, if any.
+// keeperRep answers, with the error, if any, and whether it is ErrCorrupt.
 type (
 	keeperReq struct {
 		Group  string
 		Delete bool
 	}
-	keeperRep struct{ Err string }
+	keeperRep struct {
+		Err     string
+		Corrupt bool
+	}
 )
 
 func init() { dist.Register(keeperReq{}, keeperRep{}) }
@@ -92,10 +95,18 @@ func askKeeper(ctx context.Context, caller actor.Caller, node string, req keeper
 		return fmt.Errorf("quorum: group %s on %s: %w", req.Group, node, err)
 	}
 	if rep.Err != "" {
-		return errors.New(rep.Err)
+		return keeperError(rep)
 	}
 	return nil
 }
+
+// keeperError is the error of a keeper, on its node: ErrCorrupt, by
+// errors.Is, if it was there.
+type keeperError keeperRep
+
+func (e keeperError) Error() string { return e.Err }
+
+func (e keeperError) Is(target error) bool { return e.Corrupt && target == ErrCorrupt }
 
 // keeperStarter starts the keeper and the supervisor of the members, its
 // node known as it starts.
@@ -175,13 +186,14 @@ func (k keeper) HandleInfo(waiting map[any]genserver.From[keeperRep], msg any) (
 	delete(waiting, r.Key)
 	var rep keeperRep
 	if r.Err != nil {
-		rep.Err = r.Err.Error()
+		rep = keeperRep{Err: r.Err.Error(), Corrupt: errors.Is(r.Err, ErrCorrupt)}
 	}
 	return waiting, actor.Do(from.Reply(rep))
 }
 
 // restart starts the members of the groups started on the node before,
-// and deletes those a crash left half deleted.
+// but those that cannot load what they saved, damaged, and deletes those
+// a crash left half deleted.
 func (k keeper) restart(context.Context) (any, error) {
 	started, deleting, err := kvsstorage.Registered(k.dir)
 	if err != nil {
@@ -193,7 +205,9 @@ func (k keeper) restart(context.Context) (any, error) {
 		}
 	}
 	for _, g := range started {
-		if err := k.run(g); err != nil {
+		// A member whose own files are damaged stays down, and the others
+		// start: see Damage in the package doc.
+		if err := k.run(g); err != nil && !errors.Is(err, ErrCorrupt) {
 			return nil, err
 		}
 	}
