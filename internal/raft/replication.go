@@ -11,6 +11,22 @@ import (
 // maxEntries is the most entries a message carries.
 const maxEntries = 64
 
+// maxInflight is the most entries a member matched is sent before it tells
+// it holds them: a member slower than the leader holds back what it is
+// sent, not its mailbox growing.
+const maxInflight = 4096
+
+// room returns how many entries more p may be sent before it replies, at
+// most a message: those sent and not told held, next-1 past match, are
+// counted from what the leader knows, which a message lost cannot leave
+// wrong. Until p matches, the leader sends from next again, not on.
+func (p peer) room() int {
+	if !p.matched {
+		return maxEntries
+	}
+	return min(maxEntries, maxInflight-int(p.next-1-p.match))
+}
+
 // lead makes the member the leader of its term. It appends an entry of
 // its own, which commits the entries of earlier terms with it, tells the
 // others, and starts beating.
@@ -75,7 +91,9 @@ func (b behaviour[S, Cmd, Rep]) heartbeat(d *replica[S]) []actor.Effect {
 func (b behaviour[S, Cmd, Rep]) replicate(d *replica[S]) []actor.Effect {
 	var effs []actor.Effect
 	for _, p := range d.peers {
-		effs = append(effs, b.appendTo(d, p)...)
+		if p.room() > 0 { // else, its replies or the beat send it the rest
+			effs = append(effs, b.appendTo(d, p)...)
+		}
 	}
 	return effs
 }
@@ -83,7 +101,8 @@ func (b behaviour[S, Cmd, Rep]) replicate(d *replica[S]) []actor.Effect {
 // appendTo sends p the entries from its next one on, after the one before,
 // or the snapshot, if the leader has them no more. The next it sends p go
 // on from those, on their way, once p matched: a message lost, p tells
-// it lacks the entry before the next, and the leader goes back.
+// it lacks the entry before the next, and the leader goes back. With no
+// room for more, it sends p a beat, after what p is known to hold.
 //
 //abc:hot BenchmarkLeader
 func (b behaviour[S, Cmd, Rep]) appendTo(d *replica[S], p peer) []actor.Effect {
@@ -91,7 +110,12 @@ func (b behaviour[S, Cmd, Rep]) appendTo(d *replica[S], p peer) []actor.Effect {
 		return b.sendSnapshot(d, p)
 	}
 	prev := p.next - 1
-	entries := d.log.from(p.next, maxEntries)
+	var entries []Entry
+	if room := p.room(); room > 0 {
+		entries = d.log.from(p.next, room)
+	} else {
+		prev = p.match
+	}
 	if len(entries) > 0 {
 		q := d.peer(p.id)
 		q.sent = true
