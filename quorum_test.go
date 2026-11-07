@@ -58,14 +58,15 @@ var names = []string{"a@localhost", "b@localhost", "c@localhost"}
 // cluster is a node for each of names, in this process, connected by
 // dist: on each, the storage and the members of the groups.
 type cluster struct {
-	t       *testing.T
-	machine quorum.Machine[int, int, int]
-	groups  []string
-	dynamic bool // the groups started at runtime, under Groups
-	dir     string
-	mu      sync.Mutex
-	addrs   map[string]string
-	nodes   map[string]*node
+	t             *testing.T
+	machine       quorum.Machine[int, int, int]
+	groups        []string
+	dynamic       bool   // the groups started at runtime, under Groups
+	snapshotEvery uint64 // of the Spec of the members
+	dir           string
+	mu            sync.Mutex
+	addrs         map[string]string
+	nodes         map[string]*node
 }
 
 type node struct {
@@ -109,11 +110,11 @@ func (c *cluster) tryStart(name string) error {
 	children := []supervisor.ChildSpec{{ID: "storage", Start: quorum.Storage(dir)}}
 	if c.dynamic {
 		children = append(children, supervisor.ChildSpec{ID: "groups", Start: quorum.Groups(dir, func(g string) (gen.Child, error) {
-			return quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: c.machine, Dir: dir}), nil
+			return quorum.Child(c.spec(g, dir)), nil
 		})})
 	}
 	for _, g := range c.groups {
-		children = append(children, supervisor.ChildSpec{ID: g, Start: quorum.Child(quorum.Spec[int, int, int]{Group: g, Machine: c.machine, Dir: dir})})
+		children = append(children, supervisor.ChildSpec{ID: g, Start: quorum.Child(c.spec(g, dir))})
 	}
 	sup, err := supervisor.Start(context.Background(), n, supervisor.Spec{Strategy: supervisor.OneForAll, Children: children})
 	if err != nil {
@@ -122,6 +123,11 @@ func (c *cluster) tryStart(name string) error {
 	}
 	c.nodes[name] = &node{n: n, d: d, sup: sup}
 	return nil
+}
+
+// spec is the Spec of the member of group g, keeping in dir.
+func (c *cluster) spec(g, dir string) quorum.Spec[int, int, int] {
+	return quorum.Spec[int, int, int]{Group: g, Machine: c.machine, Dir: dir, SnapshotEvery: c.snapshotEvery}
 }
 
 // stop stops the node name, if it runs.
@@ -314,9 +320,10 @@ func TestTransferLeader(t *testing.T) {
 	}
 }
 
-// newDynamic returns a cluster whose groups are started at runtime.
-func newDynamic(t *testing.T) *cluster {
-	c := &cluster{t: t, machine: highest{}, dynamic: true, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
+// newDynamic returns a cluster whose groups are started at runtime, their
+// members taking a snapshot every snapshotEvery commands, if not 0.
+func newDynamic(t *testing.T, snapshotEvery uint64) *cluster {
+	c := &cluster{t: t, machine: highest{}, dynamic: true, snapshotEvery: snapshotEvery, dir: t.TempDir(), addrs: map[string]string{}, nodes: map[string]*node{}}
 	for _, name := range names {
 		c.start(name)
 	}
@@ -345,7 +352,7 @@ func (c *cluster) runs(group string) []string {
 // started again, with what they applied; deleted, they run nowhere, nor
 // again.
 func TestCreateGroup(t *testing.T) {
-	c := newDynamic(t)
+	c := newDynamic(t, 0)
 	a := c.nodes[names[0]].n
 	for _, g := range []string{"x", "y"} {
 		if err := quorum.CreateGroup(ctx(t), a, g, names); err != nil {
